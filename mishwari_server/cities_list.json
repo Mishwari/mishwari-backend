@@ -1,0 +1,288 @@
+[
+    {
+        "city": "صنعاء",
+        "latitude": 15.354506, 
+        "longitude": 44.206351,
+        "proximity": 20
+    },
+    {
+        "city": "عدن",
+        "latitude": 12.790620, 
+        "longitude": 45.017551,
+        "proximity": 20
+    },
+    {
+        "city": "الحديدة",
+        "latitude": 14.775093,
+        "longitude": 43.010836,
+        "proximity": 20
+    },
+    {
+        "city": "تعز",
+        "latitude": 13.577582, 
+        "longitude": 44.017881,
+        "proximity": 20
+    },
+    {
+        "city": "المكلا",
+        "latitude": 14.545194, 
+        "longitude": 49.126193,
+        "proximity": 15
+    },
+    {
+        "city": "إب",
+        "latitude": 13.971593, 
+        "longitude": 44.159961,
+        "proximity": 15
+    },
+    {
+        "city": "ذمار",
+        "latitude": 14.545520, 
+        "longitude": 44.408594,
+        "proximity": 15
+    },
+    {
+        "city": "عمران",
+        "latitude": 15.662377, 
+        "longitude": 43.943773,
+        "proximity": 15
+    },
+    {
+        "city": "صعدة",
+        "latitude": 16.939166,
+        "longitude": 43.752426,
+        "proximity": 12
+    },
+    {
+        "city": "مأرب",
+        "latitude": 15.431664, 
+        "longitude": 45.331733,
+        "proximity": 15
+    },
+    {
+        "city": "جعار",
+        "latitude": 13.217312, 
+        "longitude": 45.307359,
+        "proximity": 15
+    },
+    {
+        "city": "زنجبار",
+        "latitude": 13.132598, 
+        "longitude": 45.386092,
+        "proximity": 15
+    },
+    {
+        "city": "الغيضة",
+        "latitude": 16.207425, 
+        "longitude": 52.184458,
+        "proximity": 8
+    },
+    {
+        "city": "سيئون",
+        "latitude": 15.952681, 
+        "longitude": 48.808917,
+        "proximity": 20
+    },
+    {
+        "city": "شبام",
+        "latitude": 15.919925,
+        "longitude": 48.638340,
+        "proximity": 10.04
+    },
+    {
+        "city": "المحويت",
+        "latitude": 15.468368, 
+        "longitude": 43.545772,
+        "proximity": 8.56
+    },
+    {
+        "city": "الشحر",
+        "latitude": 14.766910, 
+        "longitude": 49.608162,
+        "proximity": 6
+    },
+    {
+        "city": "البيضاء",
+        "latitude": 14.374471, 
+        "longitude": 45.421490,
+        "proximity": 15
+    },
+    {
+        "city": "رضوم",
+        "latitude": 14.083610, 
+        "longitude": 47.741005,
+        "proximity": 10
+    },
+    {
+        "city": "القطن",
+        "latitude":15.847256, 
+        "longitude": 48.463725,
+        "proximity": 10
+    },
+    {
+        "city": "بيحان",
+        "latitude": 14.797970, 
+        "longitude": 45.721443,
+        "proximity": 15
+    },
+    {
+        "city": "الدريهمي",
+        "latitude": 14.635476, 
+        "longitude": 43.040177,
+        "proximity": 10
+    },
+    {
+        "city": "الضالع",
+        "latitude": 13.702874, 
+        "longitude": 44.731663,
+        "proximity": 9
+    },
+    {
+        "city": "الخوخة",
+        "latitude": 13.810396, 
+        "longitude": 43.245605,
+        "proximity": 8
+    },
+    {
+        "city": "باجل",
+        "latitude": 15.062118,
+        "longitude":  43.285641,
+        "proximity": 8
+    },
+    {
+        "city": "يافع",
+        "latitude": 13.862016, 
+        "longitude": 45.242058,
+        "proximity": 14
+    },
+    {
+        "city": "التحيتا",
+        "latitude": 14.184343,
+        "longitude":  43.230414,
+        "proximity":10
+    },
+    {
+        "city": "البريقة",
+        "latitude":12.806236, 
+        "longitude": 44.718806,
+        "proximity": 5
+    },
+    {
+        "city": "عزان",
+        "latitude": 14.325407, 
+        "longitude": 47.446522,
+        "proximity": 5
+    },
+    {
+        "city": "ميدي",
+        "latitude": 16.314584,
+        "longitude":  42.809573,
+        "proximity": 5
+    },
+    {
+        "city": "دمت",
+        "latitude": 14.086893, 
+        "longitude": 44.671077,
+        "proximity": 5
+    },
+    {
+        "city": "الحوطة",
+        "latitude": 15.905814,
+        "longitude":  48.670863,
+        "proximity": 10
+    },
+    {
+        "city": "تريم",
+        "latitude": 16.056851,
+        "longitude":  49.006646,
+        "proximity": 12
+    },
+    {
+        "city": "عتق",
+        "latitude": 14.528283, 
+        "longitude": 46.855760,
+        "proximity": 15
+    },
+    {
+        "city": "المنصورة",
+        "latitude": 13.220718, 
+        "longitude": 44.062132,
+        "proximity": 10
+    },
+    {
+        "city": "باقم",
+        "latitude": 17.445204, 
+        "longitude": 43.458846,
+        "proximity": 8
+    },
+    {
+        "city": " الجبين ريمة",
+        "latitude": 14.677741, 
+        "longitude": 43.579960,
+        "proximity": 10
+    },
+    {
+        "city": "صرواح",
+        "latitude": 15.450222, 
+        "longitude": 45.020515,
+        "proximity": 4
+    },
+    {
+        "city": "دوعن",
+        "latitude": 15.507598, 
+        "longitude": 48.331440,
+        "proximity": 15
+    },
+    {
+        "city": "المخا",
+        "latitude": 13.320257, 
+        "longitude": 43.259678,
+        "proximity": 10
+    },
+    {
+        "city": "قعطبة",
+        "latitude": 13.853247, 
+        "longitude": 44.702910,
+        "proximity": 8
+    },
+    {
+        "city": "مودية",
+        "latitude": 13.932610, 
+        "longitude": 46.080298,
+        "proximity": 8
+    },
+    {
+        "city": "خور مكسر",
+        "latitude": 12.810157, 
+        "longitude": 45.033206,
+        "proximity": 5
+    },
+    {
+        "city": "كريتر",
+        "latitude": 12.780910, 
+        "longitude": 45.039724,
+        "proximity": 3
+    },
+    {
+        "city": "الشيخ عثمان",
+        "latitude": 12.884008, 
+        "longitude": 45.025758,
+        "proximity": 5
+    },{
+        "city": "وادي العين",
+        "latitude": 15.494094, 
+        "longitude": 48.420756 ,
+        "proximity": 5
+    },{
+        "city": "شحن",
+        "latitude": 17.778447, 
+        "longitude": 52.490466,
+        "proximity": 5
+    },
+    {
+        "city": "العبر",
+        "latitude": 16.155225, 
+        "longitude": 47.167248, 
+        "proximity": 3
+    }
+]

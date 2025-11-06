@@ -1,0 +1,122 @@
+[
+  {
+    "from_city": "صنعاء",
+    "to_city": "عدن",
+    "base_price": 3500,
+    "duration_hours": 6,
+    "route_name": "الطريق الساحلي",
+    "distance_km": 363.0,
+    "base_seats": 40,
+    "times": ["06:00", "09:00", "14:00", "18:00"]
+  },
+  {
+    "from_city": "عدن",
+    "to_city": "صنعاء",
+    "base_price": 3500,
+    "duration_hours": 6,
+    "route_name": "الطريق الساحلي",
+    "distance_km": 363.0,
+    "base_seats": 40,
+    "times": ["05:30", "08:30", "13:00", "17:30"]
+  },
+  {
+    "from_city": "صنعاء",
+    "to_city": "المكلا",
+    "base_price": 4500,
+    "duration_hours": 8,
+    "route_name": "طريق الداخل",
+    "distance_km": 480.0,
+    "base_seats": 38,
+    "times": ["05:00", "11:00", "17:00"]
+  },
+  {
+    "from_city": "المكلا",
+    "to_city": "صنعاء",
+    "base_price": 4500,
+    "duration_hours": 8,
+    "route_name": "طريق الداخل",
+    "distance_km": 480.0,
+    "base_seats": 38,
+    "times": ["06:00", "12:00", "18:00"]
+  },
+  {
+    "from_city": "عدن",
+    "to_city": "المكلا",
+    "base_price": 2800,
+    "duration_hours": 5,
+    "route_name": "الطريق الساحلي الشرقي",
+    "distance_km": 340.0,
+    "base_seats": 42,
+    "times": ["06:00", "10:00", "14:00", "18:00"]
+  },
+  {
+    "from_city": "المكلا",
+    "to_city": "عدن",
+    "base_price": 2800,
+    "duration_hours": 5,
+    "route_name": "الطريق الساحلي الشرقي",
+    "distance_km": 340.0,
+    "base_seats": 42,
+    "times": ["07:00", "11:00", "15:00", "19:00"]
+  },
+  {
+    "from_city": "صنعاء",
+    "to_city": "عدن",
+    "base_price": 4000,
+    "duration_hours": 7,
+    "route_name": "طريق تعز",
+    "distance_km": 380.0,
+    "base_seats": 36,
+    "times": ["07:00", "15:00"]
+  },
+  {
+    "from_city": "عدن",
+    "to_city": "صنعاء",
+    "base_price": 4000,
+    "duration_hours": 7,
+    "route_name": "طريق تعز",
+    "distance_km": 380.0,
+    "base_seats": 36,
+    "times": ["06:30", "14:30"]
+  },
+  {
+    "from_city": "صنعاء",
+    "to_city": "المكلا",
+    "base_price": 5000,
+    "duration_hours": 9,
+    "route_name": "الطريق السريع",
+    "distance_km": 500.0,
+    "base_seats": 44,
+    "times": ["04:00", "10:00", "16:00"]
+  },
+  {
+    "from_city": "المكلا",
+    "to_city": "صنعاء",
+    "base_price": 5000,
+    "duration_hours": 9,
+    "route_name": "الطريق السريع",
+    "distance_km": 500.0,
+    "base_seats": 44,
+    "times": ["05:00", "11:00", "17:00"]
+  },
+  {
+    "from_city": "عدن",
+    "to_city": "المكلا",
+    "base_price": 3200,
+    "duration_hours": 6,
+    "route_name": "طريق الساحل",
+    "distance_km": 360.0,
+    "base_seats": 40,
+    "times": ["05:00", "12:00", "19:00"]
+  },
+  {
+    "from_city": "المكلا",
+    "to_city": "عدن",
+    "base_price": 3200,
+    "duration_hours": 6,
+    "route_name": "طريق الساحل",
+    "distance_km": 360.0,
+    "base_seats": 40,
+    "times": ["06:00", "13:00", "20:00"]
+  }
+]
