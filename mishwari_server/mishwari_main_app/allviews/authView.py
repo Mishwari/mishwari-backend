@@ -229,19 +229,25 @@ class MobileLoginView(viewsets.ViewSet):
                     
                     # Handle operator registration
                     role = request.data.get('role', 'passenger')
-                    if role == 'driver':
-                        # Auto-create operator for individual driver
+                    print(f'[REGISTRATION] Creating operator for role: {role}')
+                    if role in ['driver', 'operator_admin']:
+                        # Auto-create operator
                         operator = BusOperator.objects.create(
                             name=profile.full_name or user.username,
                             contact_info=profile.mobile_number,
                             uses_own_system=False
                         )
-                        Driver.objects.create(
-                            user=user,
-                            profile=profile,
-                            driver_rating=5.0,
-                            operator=operator
-                        )
+                        print(f'[REGISTRATION] Created BusOperator ID: {operator.id}, contact: {operator.contact_info}')
+                        
+                        # For individual drivers, also create Driver record
+                        if role == 'driver':
+                            driver = Driver.objects.create(
+                                user=user,
+                                profile=profile,
+                                driver_rating=5.0,
+                                operator=operator
+                            )
+                            print(f'[REGISTRATION] Created Driver ID: {driver.id} for user: {user.username}')
                     
                     tokens = self.get_tokens_for_user(user)
                     return Response({

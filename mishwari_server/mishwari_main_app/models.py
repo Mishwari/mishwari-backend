@@ -404,3 +404,54 @@ class OperatorMetrics(models.Model):
     
     def __str__(self):
         return f"{self.operator.name} - Score: {self.health_score}"
+
+
+
+class UpgradeRequest(models.Model):
+    """Track driver upgrade requests to operator_admin"""
+    STATUS_CHOICES = [
+        ('pending', 'Pending Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
+    
+    # Company info
+    company_name = models.CharField(max_length=200)
+    commercial_registration = models.CharField(max_length=100)
+    tax_number = models.CharField(max_length=100, blank=True)
+    
+    # Documents
+    documents = models.JSONField(default=dict)
+    
+    # Status
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    rejection_reason = models.TextField(blank=True)
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_upgrades')
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.profile.full_name} - {self.status}"
+    
+    def approve_upgrade(self):
+        """Approve upgrade and migrate role"""
+        with transaction.atomic():
+            self.profile.role = 'operator_admin'
+            self.profile.save()
+            
+            driver = Driver.objects.filter(user=self.user).first()
+            if driver and driver.operator:
+                driver.operator.name = self.company_name
+                driver.operator.save()
+            
+            self.status = 'approved'
+            self.reviewed_at = timezone.now()
+            self.save()

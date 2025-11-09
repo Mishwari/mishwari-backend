@@ -13,7 +13,9 @@ from .views import (
 from .operator_views import (
     OperatorFleetViewSet,
     OperatorTripViewSet,
-    PhysicalBookingViewSet
+    PhysicalBookingViewSet,
+    DriverManagementViewSet,
+    UpgradeRequestViewSet
 )
     
 
@@ -46,6 +48,8 @@ router.register(r"profile",ProfileView,basename="profile")
 router.register(r"operator/fleet", OperatorFleetViewSet, basename="operator-fleet")
 router.register(r"operator/trips", OperatorTripViewSet, basename="operator-trips")
 router.register(r"operator/bookings", PhysicalBookingViewSet, basename="operator-bookings")
+router.register(r"operator/drivers", DriverManagementViewSet, basename="operator-drivers")
+router.register(r"operator/upgrade", UpgradeRequestViewSet, basename="operator-upgrade")
 
 urlpatterns = [
     path('', include(router.urls)),

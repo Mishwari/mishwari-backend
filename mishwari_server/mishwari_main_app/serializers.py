@@ -35,7 +35,7 @@ class ProfileCompletionSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Profile
-        fields = ['user','username', 'full_name', 'birth_date', 'gender','address','email']
+        fields = ['user','username', 'full_name', 'birth_date', 'gender','address','email','role']
         extra_kwargs = {
             'full_name':{'required': True}, 
             'username':{'required': True},

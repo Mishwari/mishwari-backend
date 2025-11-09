@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django import forms
 from django.core.exceptions import ValidationError
-from .models import Driver,Trip,CityList,TripStop,Booking,Seat,Bus,BusOperator,Passenger,BookingPassenger,TemporaryMobileVerification,Profile,OperatorMetrics
+from .models import Driver,Trip,CityList,TripStop,Booking,Seat,Bus,BusOperator,Passenger,BookingPassenger,TemporaryMobileVerification,Profile,OperatorMetrics,UpgradeRequest
 
 @admin.register(Driver)
 class DriverAdmin(admin.ModelAdmin):
@@ -81,4 +81,23 @@ class OperatorMetricsAdmin(admin.ModelAdmin):
     list_display = ['operator', 'health_score', 'cancellation_rate', 'strikes', 'is_suspended']
     list_filter = ['is_suspended']
     search_fields = ['operator__name']
+
+@admin.register(UpgradeRequest)
+class UpgradeRequestAdmin(admin.ModelAdmin):
+    list_display = ['profile', 'company_name', 'status', 'created_at', 'reviewed_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['profile__full_name', 'company_name', 'commercial_registration']
+    actions = ['approve_requests', 'reject_requests']
+    readonly_fields = ['created_at', 'reviewed_at']
+    
+    def approve_requests(self, request, queryset):
+        for upgrade_request in queryset.filter(status='pending'):
+            upgrade_request.approve_upgrade()
+        self.message_user(request, f"{queryset.count()} upgrade requests approved.")
+    approve_requests.short_description = "Approve selected upgrade requests"
+    
+    def reject_requests(self, request, queryset):
+        queryset.update(status='rejected')
+        self.message_user(request, f"{queryset.count()} upgrade requests rejected.")
+    reject_requests.short_description = "Reject selected upgrade requests"
 

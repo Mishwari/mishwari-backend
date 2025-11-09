@@ -7,8 +7,8 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 
-from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, BookingPassenger, Seat
-from .serializers import BusSerializer, TripsSerializer, BookingSerializer2
+from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, BookingPassenger, Seat, BusOperator, UpgradeRequest
+from .serializers import BusSerializer, TripsSerializer, BookingSerializer2, DriverSerializer
 from .permissions import IsVerifiedOperator, IsOperatorOrAdmin
 from .booking_utils import create_booking_atomic
 from .notifications import send_departure_notification
@@ -21,8 +21,18 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
     authentication_classes = [JWTAuthentication]
     
     def get_queryset(self):
-        driver = Driver.objects.get(user=self.request.user)
-        return Bus.objects.filter(operator=driver.operator)
+        # For role='driver': Get operator via Driver record
+        # For role='operator_admin': Get operator via profile
+        try:
+            driver = Driver.objects.get(user=self.request.user)
+            return Bus.objects.filter(operator=driver.operator)
+        except Driver.DoesNotExist:
+            # operator_admin case: find operator by profile
+            profile = self.request.user.profile
+            operators = BusOperator.objects.filter(contact_info=profile.mobile_number)
+            if operators.exists():
+                return Bus.objects.filter(operator=operators.first())
+            return Bus.objects.none()
     
     @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):
@@ -48,14 +58,41 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
     authentication_classes = [JWTAuthentication]
     
     def get_queryset(self):
-        driver = Driver.objects.get(user=self.request.user)
-        return Trip.objects.filter(operator=driver.operator)
+        # For role='driver': Get operator via Driver record
+        # For role='operator_admin': Get operator via profile
+        print(f'[TRIPS QUERYSET] User: {self.request.user.username}, Role: {self.request.user.profile.role}')
+        try:
+            driver = Driver.objects.get(user=self.request.user)
+            print(f'[TRIPS QUERYSET] Found Driver ID: {driver.id}, Operator ID: {driver.operator.id}')
+            return Trip.objects.filter(operator=driver.operator)
+        except Driver.DoesNotExist:
+            # operator_admin case: find operator by profile
+            profile = self.request.user.profile
+            print(f'[TRIPS QUERYSET] No Driver found, searching BusOperator by mobile: {profile.mobile_number}')
+            operators = BusOperator.objects.filter(contact_info=profile.mobile_number)
+            if operators.exists():
+                print(f'[TRIPS QUERYSET] Found BusOperator ID: {operators.first().id}')
+                return Trip.objects.filter(operator=operators.first())
+            print(f'[TRIPS QUERYSET] No BusOperator found! Returning empty queryset')
+            return Trip.objects.none()
     
     def create(self, request, *args, **kwargs):
         """Create trip as draft by default"""
         data = request.data.copy()
         if 'status' not in data:
             data['status'] = 'draft'
+        
+        # Set operator based on user role
+        try:
+            driver = Driver.objects.get(user=request.user)
+            data['operator'] = driver.operator.id
+        except Driver.DoesNotExist:
+            # operator_admin case
+            profile = request.user.profile
+            operator = BusOperator.objects.filter(contact_info=profile.mobile_number).first()
+            if operator:
+                data['operator'] = operator.id
+        
         request._full_data = data
         return super().create(request, *args, **kwargs)
     
@@ -140,31 +177,109 @@ class PhysicalBookingViewSet(viewsets.ModelViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-class DriverManagementViewSet(viewsets.ViewSet):
-    """Driver verification and management"""
+class DriverManagementViewSet(viewsets.ModelViewSet):
+    """Driver management for operator_admin"""
+    serializer_class = DriverSerializer
     permission_classes = [IsAuthenticated, IsOperatorOrAdmin]
     authentication_classes = [JWTAuthentication]
+    
+    def get_queryset(self):
+        """Get drivers for current operator"""
+        try:
+            driver = Driver.objects.get(user=self.request.user)
+            return Driver.objects.filter(operator=driver.operator)
+        except Driver.DoesNotExist:
+            profile = self.request.user.profile
+            operator = BusOperator.objects.filter(contact_info=profile.mobile_number).first()
+            if operator:
+                return Driver.objects.filter(operator=operator)
+            return Driver.objects.none()
+    
+    @action(detail=False, methods=['post'])
+    def invite(self, request):
+        """Invite driver by phone number (operator_admin only)"""
+        if request.user.profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can invite drivers'}, status=status.HTTP_403_FORBIDDEN)
+        
+        phone = request.data.get('phone')
+        if not phone:
+            return Response({'error': 'Phone number required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get operator
+        profile = request.user.profile
+        operator = BusOperator.objects.filter(contact_info=profile.mobile_number).first()
+        if not operator:
+            return Response({'error': 'Operator not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # TODO: Send SMS invitation
+        # For now, just return success
+        return Response({
+            'message': f'Invitation sent to {phone}',
+            'phone': phone
+        }, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):
         """Upload driver verification documents"""
-        try:
-            driver = Driver.objects.get(pk=pk)
-            
-            # Check if requester is the operator
-            requester_driver = Driver.objects.get(user=request.user)
-            if driver.operator != requester_driver.operator:
-                return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
-            
-            # Store document URLs
-            documents = request.data.get('documents', {})
-            driver.verification_documents = documents
-            driver.save()
-            
-            return Response({
-                'message': 'Driver documents uploaded successfully. Pending review.',
-                'driver_id': driver.id,
-                'is_verified': driver.is_verified
-            })
-        except Driver.DoesNotExist:
-            return Response({'error': 'Driver not found'}, status=status.HTTP_404_NOT_FOUND)
+        driver = self.get_object()
+        
+        documents = request.data.get('documents', {})
+        driver.verification_documents = documents
+        driver.save()
+        
+        return Response({
+            'message': 'Driver documents uploaded successfully. Pending review.',
+            'driver_id': driver.id,
+            'is_verified': driver.is_verified
+        })
+
+
+class UpgradeRequestViewSet(viewsets.ModelViewSet):
+    """Handle driver upgrade requests"""
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+    
+    def get_queryset(self):
+        return UpgradeRequest.objects.filter(user=self.request.user)
+    
+    def create(self, request):
+        """Submit upgrade request"""
+        if request.user.profile.role != 'driver':
+            return Response({'error': 'Only drivers can request upgrade'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if already has pending request
+        existing = UpgradeRequest.objects.filter(user=request.user, status='pending').first()
+        if existing:
+            return Response({'error': 'You already have a pending upgrade request'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        upgrade_request = UpgradeRequest.objects.create(
+            user=request.user,
+            profile=request.user.profile,
+            company_name=request.data.get('company_name'),
+            commercial_registration=request.data.get('commercial_registration'),
+            tax_number=request.data.get('tax_number', ''),
+            documents=request.data.get('documents', {})
+        )
+        
+        return Response({
+            'id': upgrade_request.id,
+            'status': upgrade_request.status,
+            'message': 'Upgrade request submitted successfully'
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=False, methods=['get'])
+    def status(self, request):
+        """Get current upgrade request status"""
+        upgrade_request = UpgradeRequest.objects.filter(user=request.user).order_by('-created_at').first()
+        
+        if not upgrade_request:
+            return Response({'status': 'none', 'message': 'No upgrade request found'})
+        
+        return Response({
+            'id': upgrade_request.id,
+            'status': upgrade_request.status,
+            'company_name': upgrade_request.company_name,
+            'created_at': upgrade_request.created_at,
+            'reviewed_at': upgrade_request.reviewed_at,
+            'rejection_reason': upgrade_request.rejection_reason
+        })
