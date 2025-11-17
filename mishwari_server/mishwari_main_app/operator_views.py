@@ -7,11 +7,20 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 
-from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, BookingPassenger, Seat, BusOperator, UpgradeRequest
+from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, BookingPassenger, Seat, BusOperator, UpgradeRequest, CityList
 from .serializers import BusSerializer, TripsSerializer, BookingSerializer2, DriverSerializer
 from .permissions import IsVerifiedOperator, IsOperatorOrAdmin
 from .booking_utils import create_booking_atomic
 from .notifications import send_departure_notification
+from .route_utils import (
+    cache_route_session, 
+    get_cached_route_session,
+    clear_route_session,
+    get_google_maps_client,
+    detect_waypoints_from_polyline
+)
+from .trip_creation_utils import create_trip_from_cached_route
+import polyline
 
 
 class OperatorFleetViewSet(viewsets.ModelViewSet):
@@ -20,18 +29,47 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOperatorOrAdmin]
     authentication_classes = [JWTAuthentication]
     
+    def update(self, request, *args, **kwargs):
+        """Override update to uncheck is_verified when bus_number or bus_type changes"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        
+        # Uncheck is_verified only if bus_number or bus_type changed
+        if ('bus_number' in serializer.validated_data and serializer.validated_data['bus_number'] != instance.bus_number) or \
+           ('bus_type' in serializer.validated_data and serializer.validated_data['bus_type'] != instance.bus_type):
+            serializer.validated_data['is_verified'] = False
+        
+        self.perform_update(serializer)
+        return Response(serializer.data)
+    
+    def partial_update(self, request, *args, **kwargs):
+        """Override partial_update to uncheck is_verified when bus_number or bus_type changes"""
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+    
     def get_queryset(self):
         # For role='driver': Get operator via Driver record
         # For role='operator_admin': Get operator via profile
+        print(f'[FLEET QUERYSET] User: {self.request.user.username}, Role: {self.request.user.profile.role}')
         try:
             driver = Driver.objects.get(user=self.request.user)
-            return Bus.objects.filter(operator=driver.operator)
+            print(f'[FLEET QUERYSET] Found Driver ID: {driver.id}, Operator ID: {driver.operator.id}')
+            buses = Bus.objects.filter(operator=driver.operator)
+            print(f'[FLEET QUERYSET] Found {buses.count()} buses')
+            return buses
         except Driver.DoesNotExist:
             # operator_admin case: find operator by profile
             profile = self.request.user.profile
+            print(f'[FLEET QUERYSET] No Driver found, searching BusOperator by mobile: {profile.mobile_number}')
             operators = BusOperator.objects.filter(contact_info=profile.mobile_number)
             if operators.exists():
-                return Bus.objects.filter(operator=operators.first())
+                print(f'[FLEET QUERYSET] Found BusOperator ID: {operators.first().id}')
+                buses = Bus.objects.filter(operator=operators.first())
+                print(f'[FLEET QUERYSET] Found {buses.count()} buses')
+                return buses
+            print(f'[FLEET QUERYSET] No BusOperator found! Returning empty queryset')
             return Bus.objects.none()
     
     @action(detail=True, methods=['post'])
@@ -64,7 +102,7 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
         try:
             driver = Driver.objects.get(user=self.request.user)
             print(f'[TRIPS QUERYSET] Found Driver ID: {driver.id}, Operator ID: {driver.operator.id}')
-            return Trip.objects.filter(operator=driver.operator)
+            queryset = Trip.objects.filter(operator=driver.operator)
         except Driver.DoesNotExist:
             # operator_admin case: find operator by profile
             profile = self.request.user.profile
@@ -72,9 +110,17 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
             operators = BusOperator.objects.filter(contact_info=profile.mobile_number)
             if operators.exists():
                 print(f'[TRIPS QUERYSET] Found BusOperator ID: {operators.first().id}')
-                return Trip.objects.filter(operator=operators.first())
-            print(f'[TRIPS QUERYSET] No BusOperator found! Returning empty queryset')
-            return Trip.objects.none()
+                queryset = Trip.objects.filter(operator=operators.first())
+            else:
+                print(f'[TRIPS QUERYSET] No BusOperator found! Returning empty queryset')
+                return Trip.objects.none()
+        
+        # Filter by status if provided
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        return queryset
     
     def create(self, request, *args, **kwargs):
         """Create trip as draft by default"""
@@ -140,6 +186,170 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
             'message': f'Departure notification sent to {notification_count} passengers',
             'actual_departure': trip.actual_departure
         })
+    
+    @action(detail=False, methods=['get'], url_path='detect-routes')
+    def detect_routes(self, request):
+        """Get route alternatives with summary (caches full response). GET /operator/trips/detect-routes/?from_city=1&to_city=5"""
+        from_city_id = request.query_params.get('from_city')
+        to_city_id = request.query_params.get('to_city')
+        
+        if not from_city_id or not to_city_id:
+            return Response(
+                {'error': 'from_city and to_city required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from_city = CityList.objects.get(id=from_city_id)
+            to_city = CityList.objects.get(id=to_city_id)
+        except CityList.DoesNotExist:
+            return Response(
+                {'error': 'Invalid city ID'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            gmaps = get_google_maps_client()
+            routes = gmaps.directions(
+                f"{from_city.latitude},{from_city.longitude}",
+                f"{to_city.latitude},{to_city.longitude}",
+                mode='driving',
+                alternatives=True
+            )
+            
+            if not routes:
+                return Response(
+                    {'error': 'No routes found between cities'}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        except Exception as e:
+            return Response(
+                {'error': f'Google Maps API error: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        session_id = cache_route_session(from_city, to_city, routes)
+        
+        routes_summary = [
+            {
+                'route_index': idx,
+                'summary': route.get('summary', f'Route {idx + 1}'),
+                'distance_km': route['legs'][0]['distance']['value'] / 1000,
+                'duration_min': route['legs'][0]['duration']['value'] / 60,
+                'polyline': route['overview_polyline']['points']
+            }
+            for idx, route in enumerate(routes)
+        ]
+        
+        return Response({
+            'session_id': session_id,
+            'from_city': {'id': from_city.id, 'name': from_city.city},
+            'to_city': {'id': to_city.id, 'name': to_city.city},
+            'routes': routes_summary
+        })
+    
+    @action(detail=False, methods=['get'], url_path='detect-waypoints')
+    def detect_waypoints(self, request):
+        """Get waypoints for selected route (uses cached data). GET /operator/trips/detect-waypoints/?session_id=uuid&route_index=0"""
+        session_id = request.query_params.get('session_id')
+        route_index = request.query_params.get('route_index')
+        
+        if not session_id or route_index is None:
+            return Response(
+                {'error': 'session_id and route_index required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        cached_data = get_cached_route_session(session_id)
+        if not cached_data:
+            return Response(
+                {'error': 'Session expired. Please select route again.'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            route_index = int(route_index)
+            selected_route = cached_data['routes'][route_index]
+        except (ValueError, IndexError):
+            return Response(
+                {'error': 'Invalid route_index'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        polyline_points = polyline.decode(selected_route['overview_polyline']['points'])
+        
+        from_city = CityList.objects.get(id=cached_data['from_city']['id'])
+        to_city = CityList.objects.get(id=cached_data['to_city']['id'])
+        
+        waypoints = detect_waypoints_from_polyline(polyline_points, from_city, to_city)
+        
+        # Calculate total distance for the route
+        total_distance = selected_route['legs'][0]['distance']['value'] / 1000
+        
+        return Response({
+            'route_index': route_index,
+            'route_summary': selected_route.get('summary', f'Route {route_index + 1}'),
+            'total_distance_km': total_distance,
+            'total_duration_min': selected_route['legs'][0]['duration']['value'] / 60,
+            'waypoints': waypoints
+        })
+    
+    @action(detail=True, methods=['get'])
+    def bookings(self, request, pk=None):
+        """Get bookings for a specific trip"""
+        trip = self.get_object()
+        bookings = Booking.objects.filter(trip=trip).order_by('-booking_time')
+        serializer = BookingSerializer2(bookings, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'], url_path='create-with-stops')
+    def create_with_stops(self, request):
+        """Create trip using cached route data. POST /operator/trips/create-with-stops/"""
+        session_id = request.data.get('session_id')
+        route_index = request.data.get('route_index')
+        
+        if not session_id or route_index is None:
+            return Response(
+                {'error': 'session_id and route_index required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        cached_data = get_cached_route_session(session_id)
+        if not cached_data:
+            return Response(
+                {'error': 'Session expired. Please select route again.'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            selected_route = cached_data['routes'][int(route_index)]
+            
+            driver = Driver.objects.get(user=request.user)
+            bus = Bus.objects.get(id=request.data['bus'], operator=driver.operator)
+            
+            trip = create_trip_from_cached_route(
+                operator=driver.operator,
+                bus=bus,
+                driver=driver,
+                cached_data=cached_data,
+                selected_route=selected_route,
+                trip_data=request.data,
+                selected_waypoint_ids=request.data.get('selected_waypoints', []),
+                custom_prices=request.data.get('custom_prices', {})
+            )
+            
+            clear_route_session(session_id)
+            
+            serializer = self.get_serializer(trip)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        except Driver.DoesNotExist:
+            return Response({'error': 'Driver not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Bus.DoesNotExist:
+            return Response({'error': 'Bus not found or not owned by operator'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 class PhysicalBookingViewSet(viewsets.ModelViewSet):
@@ -187,10 +397,13 @@ class DriverManagementViewSet(viewsets.ModelViewSet):
         """Get drivers for current operator"""
         try:
             driver = Driver.objects.get(user=self.request.user)
+            print(f'[DRIVER MGMT QUERYSET] Found Driver ID: {driver.id}, Operator ID: {driver.operator.id}')
             return Driver.objects.filter(operator=driver.operator)
         except Driver.DoesNotExist:
             profile = self.request.user.profile
+            print(f'[DRIVER MGMT QUERYSET] Profile ID: {profile.id}, Role: {profile.role}')
             operator = BusOperator.objects.filter(contact_info=profile.mobile_number).first()
+            print(f'[DRIVER MGMT QUERYSET] Operator ID: {operator.id}')
             if operator:
                 return Driver.objects.filter(operator=operator)
             return Driver.objects.none()

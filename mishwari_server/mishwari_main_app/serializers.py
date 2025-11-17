@@ -112,6 +112,7 @@ class TripsSerializer(serializers.ModelSerializer):
     bus = BusSerializer(read_only=True)
     from_city = CitiesSerializer(read_only=True)
     to_city = CitiesSerializer(read_only=True)
+    stops = serializers.SerializerMethodField()
     
     # Add computed fields for backward compatibility
     departure_time = serializers.SerializerMethodField()
@@ -125,10 +126,10 @@ class TripsSerializer(serializers.ModelSerializer):
         fields = ['id','driver','planned_route_name','bus','from_city','to_city','journey_date',
                   'departure_time','arrival_time','available_seats','price','status',
                   'trip_type','planned_departure','departure_window_start','departure_window_end','actual_departure',
-                  'can_publish']
+                  'can_publish','stops','seat_matrix']
     
     def get_departure_time(self, obj):
-        """Get departure time from first stop"""
+        """Ge`t departure time from first stop"""
         first_stop = obj.stops.order_by('sequence').first()
         return first_stop.planned_departure if first_stop else None
     
@@ -149,16 +150,28 @@ class TripsSerializer(serializers.ModelSerializer):
     def get_can_publish(self, obj):
         """Check if trip can be published (Golden Rule)"""
         return obj.can_publish()
+    
+    def get_stops(self, obj):
+        """Get all stops for this trip"""
+        stops = obj.stops.order_by('sequence').all()
+        return [{
+            'id': stop.id,
+            'city': {'id': stop.city.id, 'name': stop.city.city},
+            'sequence': stop.sequence,
+            'distance_from_start_km': stop.distance_from_start_km,
+            'price_from_start': stop.price_from_start,
+            'planned_arrival': stop.planned_arrival,
+            'planned_departure': stop.planned_departure
+        } for stop in stops]
 
 
 
 class TripStopSerializer(serializers.ModelSerializer):
     city = CitiesSerializer(read_only=True)
-    trip = TripsSerializer(read_only=True)
 
     class Meta:
         model = TripStop
-        fields = ['id','trip','city','sequence','planned_arrival','planned_departure','distance_from_start_km','price_from_start']
+        fields = ['id','city','sequence','planned_arrival','planned_departure','distance_from_start_km','price_from_start']
 
 
 
@@ -190,16 +203,28 @@ class PassengerSerializer(serializers.ModelSerializer):
         model = Passenger
         fields = ['id', 'name', 'email', 'phone','age','is_checked','gender']
 
+class BookingPassengerSerializer(serializers.ModelSerializer):
+    """Serializer for BookingPassenger with denormalized fields"""
+    seat_number = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = BookingPassenger
+        fields = ['id', 'name', 'email', 'phone', 'age', 'gender', 'seat_number']
+    
+    def get_seat_number(self, obj):
+        return obj.seat.seat_number if obj.seat else None
+
 class BookingSerializer2(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     trip = serializers.PrimaryKeyRelatedField(queryset=Trip.objects.all())
     from_stop = serializers.PrimaryKeyRelatedField(queryset=TripStop.objects.all())
     to_stop = serializers.PrimaryKeyRelatedField(queryset=TripStop.objects.all())
     passengers = PassengerSerializer(many=True)
+    passenger_details = BookingPassengerSerializer(many=True, read_only=True)
 
     class Meta:
         model = Booking
-        fields = ['id', 'user', 'status', 'total_fare', 'trip', 'from_stop', 'to_stop', 'passengers', 'is_paid', 'payment_method', 'booking_time', 'booking_source', 'created_by']
+        fields = ['id', 'user', 'status', 'total_fare', 'trip', 'from_stop', 'to_stop', 'passengers', 'passenger_details', 'is_paid', 'payment_method', 'booking_time', 'booking_source', 'created_by']
 
     def validate(self, data):
         from .booking_utils import get_available_seats_for_journey
@@ -208,6 +233,7 @@ class BookingSerializer2(serializers.ModelSerializer):
         from_stop = data.get('from_stop')
         to_stop = data.get('to_stop')
         passengers = self.initial_data.get('passengers', [])
+        checked_passengers = [p for p in passengers if p.get('is_checked', False)]
 
         if trip and from_stop and to_stop:
             # Check segment-based availability
@@ -215,11 +241,11 @@ class BookingSerializer2(serializers.ModelSerializer):
             
             if available_seats == 0:
                 raise serializers.ValidationError(f"No seats available for this journey")
-            if len(passengers) > available_seats:
+            if len(checked_passengers) > available_seats:
                 raise serializers.ValidationError(f"Too many passengers. Only {available_seats} seats available.")
             
-            # Validate fare
-            expected_fare = (to_stop.price_from_start - from_stop.price_from_start) * len(passengers)
+            # Validate fare based on checked passengers only
+            expected_fare = (to_stop.price_from_start - from_stop.price_from_start) * len(checked_passengers)
             total_fare = data.get('total_fare')
             if total_fare != expected_fare:
                 raise serializers.ValidationError(f"Invalid fare. Expected {expected_fare}, received {total_fare}.")
@@ -260,6 +286,8 @@ class BookingSerializer2(serializers.ModelSerializer):
         representation['trip'] = TripsSerializer(instance.trip).data
         representation['from_stop'] = TripStopSerializer(instance.from_stop).data
         representation['to_stop'] = TripStopSerializer(instance.to_stop).data
+        # Use passenger_details (denormalized) instead of passengers (FK)
+        representation['passengers'] = BookingPassengerSerializer(instance.passenger_details.all(), many=True).data
         return representation
     
     # LOOP validate passenger by id to ignore passenger if it already there

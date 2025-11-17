@@ -38,7 +38,7 @@ from .serializers import (BookingSerializer2, UserSerializer,DriverSerializer,Tr
                           BookingTripSerializer,
                           PassengerSerializer
                           )
-from  .models import Driver, TripStop,Trip,CityList,Seat,Booking,Passenger
+from  .models import Driver, TripStop,Trip,CityList,Seat,Booking,Passenger,Bus
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
@@ -107,41 +107,84 @@ class TripStopView(viewsets.ModelViewSet):
 
 
 class TripSearchView(viewsets.ViewSet):
-    """Search trips by from/to cities and date"""
+    """Search trips - supports partial journeys"""
+    permission_classes = [AllowAny]
     
     def list(self, request):
-        # Support both old (pickup/destination) and new (from_city/to_city) parameters
         from_city = self.request.query_params.get('pickup') or self.request.query_params.get('from_city')
         to_city = self.request.query_params.get('destination') or self.request.query_params.get('to_city')
         date_str = self.request.query_params.get('date', None)
 
-        if from_city and to_city and date_str:
-            from datetime import datetime
-            try:
-                filter_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                trips = Trip.objects.filter(
-                    from_city__city=from_city,
-                    to_city__city=to_city,
-                    journey_date=filter_date,
-                    status='scheduled'
-                ).select_related('from_city', 'to_city', 'bus', 'driver', 'driver__operator').prefetch_related('stops')
-                
-                serializer = TripsSerializer(trips, many=True)
-                return Response(serializer.data)
-            except ValueError:
-                return Response({'error': 'Invalid date format'}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            return Response({'error': 'pickup/destination (or from_city/to_city) and date are required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not all([from_city, to_city, date_str]):
+            return Response({'error': 'from_city, to_city, and date required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from datetime import datetime
+        try:
+            filter_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            from_city_obj = CityList.objects.get(city=from_city)
+            to_city_obj = CityList.objects.get(city=to_city)
+        except (ValueError, CityList.DoesNotExist):
+            return Response({'error': 'Invalid date or city'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Find trips with BOTH cities as stops
+        trips_with_from = TripStop.objects.filter(
+            city=from_city_obj,
+            trip__journey_date=filter_date,
+            trip__status='published'
+        ).values_list('trip_id', flat=True)
+        
+        trips_with_to = TripStop.objects.filter(
+            city=to_city_obj,
+            trip__journey_date=filter_date,
+            trip__status='published'
+        ).values_list('trip_id', flat=True)
+        
+        matching_trip_ids = set(trips_with_from) & set(trips_with_to)
+        
+        results = []
+        for trip_id in matching_trip_ids:
+            trip = Trip.objects.select_related('bus', 'driver').get(id=trip_id)
+            
+            from_stop = trip.stops.filter(city=from_city_obj).first()
+            to_stop = trip.stops.filter(city=to_city_obj).first()
+            
+            if not from_stop or not to_stop or from_stop.sequence >= to_stop.sequence:
+                continue
+            
+            # Calculate available seats for this segment
+            segments = [f"{i}-{i+1}" for i in range(from_stop.sequence, to_stop.sequence)]
+            available_seats = min([trip.seat_matrix.get(seg, 0) for seg in segments]) if segments else 0
+            
+            fare = to_stop.price_from_start - from_stop.price_from_start
+            
+            results.append({
+                'id': trip.id,
+                'trip_id': trip.id,
+                'from_stop_id': from_stop.id,
+                'to_stop_id': to_stop.id,
+                'from_city': from_city,
+                'to_city': to_city,
+                'departure_time': from_stop.planned_departure,
+                'arrival_time': to_stop.planned_arrival,
+                'available_seats': available_seats,
+                'fare': fare,
+                'price': fare,
+                'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'amenities': trip.bus.amenities} if trip.bus else None,
+                'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
+                'trip_type': trip.trip_type,
+                'status': trip.status,
+                'planned_route_name': trip.planned_route_name
+            })
+        
+        return Response(results, status=status.HTTP_200_OK)
     
     def retrieve(self, request, pk=None):
-        trip = get_object_or_404(Trip.objects.all(), pk=pk)
+        trip = get_object_or_404(Trip.objects.filter(status='published'), pk=pk)
         serializer = TripsSerializer(trip)
         return Response(serializer.data)
     
     def get_permissions(self):
-        if self.request.method in ['GET']:
-            return [AllowAny()]
-        return [IsAdminUser()]
+        return [AllowAny()]
     
      
 class CitiesView(viewsets.ModelViewSet):
@@ -152,6 +195,88 @@ class CitiesView(viewsets.ModelViewSet):
         if self.request.method in ['GET']:
             return [AllowAny()]
         return [IsAdminUser()]
+    
+    @action(detail=False, methods=['get'], url_path='departure-cities')
+    def departure_cities(self, request):
+        """Get cities that can be departure points (not last stops) with trip counts"""
+        from datetime import datetime
+        date_str = request.query_params.get('date')
+        
+        if not date_str:
+            return Response({'error': 'date parameter required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            filter_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'error': 'Invalid date format'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get trips for the date
+        trips = Trip.objects.filter(journey_date=filter_date, status='published')
+        
+        # Find cities that are NOT the last stop in at least one trip
+        valid_departure_cities = {}
+        for trip in trips:
+            stops = trip.stops.order_by('sequence')
+            max_sequence = stops.last().sequence if stops.exists() else -1
+            
+            # All stops except the last one can be departure points
+            for stop in stops.exclude(sequence=max_sequence):
+                city_id = stop.city.id
+                city_name = stop.city.city
+                if city_id not in valid_departure_cities:
+                    valid_departure_cities[city_id] = {'id': city_id, 'city': city_name, 'trip_count': 0}
+                valid_departure_cities[city_id]['trip_count'] += 1
+        
+        result = sorted(valid_departure_cities.values(), key=lambda x: x['city'])
+        return Response(result, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'], url_path='destination-cities')
+    def destination_cities(self, request):
+        """Get cities that have trips going to them from a specific city with trip counts"""
+        from datetime import datetime
+        from_city = request.query_params.get('from_city')
+        date_str = request.query_params.get('date')
+        
+        if not all([from_city, date_str]):
+            return Response({'error': 'from_city and date parameters required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            filter_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            from_city_obj = CityList.objects.get(city=from_city)
+        except (ValueError, CityList.DoesNotExist):
+            return Response({'error': 'Invalid date or city'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get trips that have from_city as a stop
+        trips_with_from_city = TripStop.objects.filter(
+            city=from_city_obj,
+            trip__journey_date=filter_date,
+            trip__status='published'
+        ).values_list('trip_id', flat=True)
+        
+        # Get from_city sequence for each trip
+        from_city_sequences = {}
+        for trip_id in trips_with_from_city:
+            from_stop = TripStop.objects.filter(trip_id=trip_id, city=from_city_obj).first()
+            if from_stop:
+                from_city_sequences[trip_id] = from_stop.sequence
+        
+        # Get destination cities with higher sequence
+        valid_destinations = set()
+        for trip_id, from_seq in from_city_sequences.items():
+            dest_stops = TripStop.objects.filter(trip_id=trip_id, sequence__gt=from_seq).exclude(city=from_city_obj)
+            for stop in dest_stops:
+                valid_destinations.add((stop.city.id, stop.city.city))
+        
+        # Count trips for each destination
+        result = []
+        for city_id, city_name in valid_destinations:
+            trip_count = sum(1 for trip_id, from_seq in from_city_sequences.items()
+                           if TripStop.objects.filter(trip_id=trip_id, city_id=city_id, sequence__gt=from_seq).exists())
+            result.append({'id': city_id, 'city': city_name, 'trip_count': trip_count})
+        
+        result.sort(key=lambda x: x['city'])
+        
+        return Response(result, status=status.HTTP_200_OK)
 
     
 
@@ -239,22 +364,29 @@ class RouteViewSet(viewsets.ViewSet):
             end_city = cache.get(cache_key_end_city)
 
   
+            PROXIMITY_KM = 2.0
             cities = CityList.objects.exclude(city__in=[next(iter(start_city.items()))[0], next(iter(end_city.items()))[0]])
-            close_cities =[]
-            city_distances = []
+            matched_cities = {}
+            
             for city in cities:
-                coordinates = (city.latitude, city.longitude)
-                if self.is_point_near_polyline(coordinates, route_polyline, city.proximity):
-                    nearest_point_on_route = self.find_nearest_point_on_route(coordinates, route_polyline)
-                    # Ensure coordinates are in the correct format
-                    if isinstance(nearest_point_on_route, Point):
-                        nearest_point_tuple = (nearest_point_on_route.x, nearest_point_on_route.y)
-                        distance_along_route = self.calculate_distance_along_route(route_polyline, nearest_point_tuple)
-                        city_distances.append((city.city, city.coordinates, distance_along_route))
-                    else:
-                        print("Nearest point on route is not valid:", nearest_point_on_route)
-                    # close_cities.append([city.city, city.coordinates])
-            close_cities = sorted(city_distances, key=lambda x: x[2])
+                for waypoint in city.waypoints:
+                    coords = (waypoint['lat'], waypoint['lon'])
+                    
+                    if self.is_point_near_polyline(coords, route_polyline, PROXIMITY_KM):
+                        nearest_point = self.find_nearest_point_on_route(coords, route_polyline)
+                        if isinstance(nearest_point, Point):
+                            distance_along_route = self.calculate_distance_along_route(
+                                route_polyline,
+                                (nearest_point.x, nearest_point.y)
+                            )
+                            
+                            # Keep earliest waypoint on route
+                            if city.city not in matched_cities or distance_along_route < matched_cities[city.city][1]:
+                                matched_cities[city.city] = (f"{waypoint['lat']}, {waypoint['lon']}", distance_along_route)
+                        break  # Found match, skip other waypoints
+            
+            close_cities = [(name, coords, dist) for name, (coords, dist) in matched_cities.items()]
+            close_cities = sorted(close_cities, key=lambda x: x[2])
             print('close_cities: ',close_cities)
             close_points = [cp[0] for cp in close_cities]
             print('close_points: ',close_points)
@@ -583,3 +715,38 @@ class PassengersViewSet(viewsets.ModelViewSet):
         passengers = Passenger.objects.filter(user=self.request.user.id)
         print('passengers: ',passengers)
         return Passenger.objects.filter(user=self.request.user.id)
+    
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        data = serializer.data
+        
+        # Auto-check account owner if exists
+        user_profile = request.user.profile
+        for passenger in data:
+            if passenger.get('name') == user_profile.full_name:
+                passenger['is_checked'] = True
+        
+        return Response(data)
+    
+    @action(detail=False, methods=['post'], url_path='bulk-update-checked')
+    def bulk_update_checked(self, request):
+        """Bulk update is_checked status for passengers"""
+        passengers_data = request.data.get('passengers', [])
+        
+        for passenger_data in passengers_data:
+            passenger_id = passenger_data.get('id')
+            is_checked = passenger_data.get('is_checked', False)
+            
+            if passenger_id:
+                try:
+                    passenger = Passenger.objects.get(id=passenger_id, user=request.user)
+                    passenger.is_checked = is_checked
+                    passenger.save()
+                except Passenger.DoesNotExist:
+                    pass
+        
+        return Response({'message': 'Passengers updated successfully'}, status=status.HTTP_200_OK)

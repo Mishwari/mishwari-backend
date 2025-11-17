@@ -120,6 +120,9 @@ WSGI_APPLICATION = 'mishwari_server.wsgi.application'
 STRIPE_SECRET_KEY = ''  # Use your real secret key
 STRIPE_WEBHOOK_SECRET = ''  # Use your real webhook secret key
 
+# Google Maps API
+GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY', '')
+
 # Use SQLite if DATABASE_HOST is empty, otherwise PostgreSQL
 if not os.getenv('DATABASE_HOST'):
     DATABASES = {

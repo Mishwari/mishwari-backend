@@ -1,288 +1,288 @@
 [
     {
         "city": "صنعاء",
-        "latitude": 15.354506, 
-        "longitude": 44.206351,
-        "proximity": 20
+        "waypoints": [
+            {"lat": 15.354506, "lon": 44.206351, "name": "Main Station"}
+        ]
     },
     {
         "city": "عدن",
-        "latitude": 12.790620, 
-        "longitude": 45.017551,
-        "proximity": 20
+        "waypoints": [
+            {"lat": 12.790620, "lon": 45.017551, "name": "Main Station"}
+        ]
     },
     {
         "city": "الحديدة",
-        "latitude": 14.775093,
-        "longitude": 43.010836,
-        "proximity": 20
+        "waypoints": [
+            {"lat": 14.775093, "lon": 43.010836, "name": "Main Station"}
+        ]
     },
     {
         "city": "تعز",
-        "latitude": 13.577582, 
-        "longitude": 44.017881,
-        "proximity": 20
+        "waypoints": [
+            {"lat": 13.577582, "lon": 44.017881, "name": "Main Station"}
+        ]
     },
     {
         "city": "المكلا",
-        "latitude": 14.545194, 
-        "longitude": 49.126193,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 14.545194, "lon": 49.126193, "name": "Main Station"}
+        ]
     },
     {
         "city": "إب",
-        "latitude": 13.971593, 
-        "longitude": 44.159961,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 13.971593, "lon": 44.159961, "name": "Main Station"}
+        ]
     },
     {
         "city": "ذمار",
-        "latitude": 14.545520, 
-        "longitude": 44.408594,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 14.545520, "lon": 44.408594, "name": "Main Station"}
+        ]
     },
     {
         "city": "عمران",
-        "latitude": 15.662377, 
-        "longitude": 43.943773,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 15.662377, "lon": 43.943773, "name": "Main Station"}
+        ]
     },
     {
         "city": "صعدة",
-        "latitude": 16.939166,
-        "longitude": 43.752426,
-        "proximity": 12
+        "waypoints": [
+            {"lat": 16.939166, "lon": 43.752426, "name": "Main Station"}
+        ]
     },
     {
         "city": "مأرب",
-        "latitude": 15.431664, 
-        "longitude": 45.331733,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 15.431664, "lon": 45.331733, "name": "Main Station"}
+        ]
     },
     {
         "city": "جعار",
-        "latitude": 13.217312, 
-        "longitude": 45.307359,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 13.217312, "lon": 45.307359, "name": "Main Station"}
+        ]
     },
     {
         "city": "زنجبار",
-        "latitude": 13.132598, 
-        "longitude": 45.386092,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 13.132598, "lon": 45.386092, "name": "Main Station"}
+        ]
     },
     {
         "city": "الغيضة",
-        "latitude": 16.207425, 
-        "longitude": 52.184458,
-        "proximity": 8
+        "waypoints": [
+            {"lat": 16.207425, "lon": 52.184458, "name": "Main Station"}
+        ]
     },
     {
         "city": "سيئون",
-        "latitude": 15.952681, 
-        "longitude": 48.808917,
-        "proximity": 20
+        "waypoints": [
+            {"lat": 15.952681, "lon": 48.808917, "name": "Main Station"}
+        ]
     },
     {
         "city": "شبام",
-        "latitude": 15.919925,
-        "longitude": 48.638340,
-        "proximity": 10.04
+        "waypoints": [
+            {"lat": 15.919925, "lon": 48.638340, "name": "Main Station"}
+        ]
     },
     {
         "city": "المحويت",
-        "latitude": 15.468368, 
-        "longitude": 43.545772,
-        "proximity": 8.56
+        "waypoints": [
+            {"lat": 15.468368, "lon": 43.545772, "name": "Main Station"}
+        ]
     },
     {
         "city": "الشحر",
-        "latitude": 14.766910, 
-        "longitude": 49.608162,
-        "proximity": 6
+        "waypoints": [
+            {"lat": 14.766910, "lon": 49.608162, "name": "Main Station"}
+        ]
     },
     {
         "city": "البيضاء",
-        "latitude": 14.374471, 
-        "longitude": 45.421490,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 14.374471, "lon": 45.421490, "name": "Main Station"}
+        ]
     },
     {
         "city": "رضوم",
-        "latitude": 14.083610, 
-        "longitude": 47.741005,
-        "proximity": 10
+        "waypoints": [
+            {"lat": 14.083610, "lon": 47.741005, "name": "Main Station"}
+        ]
     },
     {
         "city": "القطن",
-        "latitude":15.847256, 
-        "longitude": 48.463725,
-        "proximity": 10
+        "waypoints": [
+            {"lat": 15.847256, "lon": 48.463725, "name": "Main Station"}
+        ]
     },
     {
         "city": "بيحان",
-        "latitude": 14.797970, 
-        "longitude": 45.721443,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 14.797970, "lon": 45.721443, "name": "Main Station"}
+        ]
     },
     {
         "city": "الدريهمي",
-        "latitude": 14.635476, 
-        "longitude": 43.040177,
-        "proximity": 10
+        "waypoints": [
+            {"lat": 14.635476, "lon": 43.040177, "name": "Main Station"}
+        ]
     },
     {
         "city": "الضالع",
-        "latitude": 13.702874, 
-        "longitude": 44.731663,
-        "proximity": 9
+        "waypoints": [
+            {"lat": 13.702874, "lon": 44.731663, "name": "Main Station"}
+        ]
     },
     {
         "city": "الخوخة",
-        "latitude": 13.810396, 
-        "longitude": 43.245605,
-        "proximity": 8
+        "waypoints": [
+            {"lat": 13.810396, "lon": 43.245605, "name": "Main Station"}
+        ]
     },
     {
         "city": "باجل",
-        "latitude": 15.062118,
-        "longitude":  43.285641,
-        "proximity": 8
+        "waypoints": [
+            {"lat": 15.062118, "lon": 43.285641, "name": "Main Station"}
+        ]
     },
     {
         "city": "يافع",
-        "latitude": 13.862016, 
-        "longitude": 45.242058,
-        "proximity": 14
+        "waypoints": [
+            {"lat": 13.862016, "lon": 45.242058, "name": "Main Station"}
+        ]
     },
     {
         "city": "التحيتا",
-        "latitude": 14.184343,
-        "longitude":  43.230414,
-        "proximity":10
+        "waypoints": [
+            {"lat": 14.184343, "lon": 43.230414, "name": "Main Station"}
+        ]
     },
     {
         "city": "البريقة",
-        "latitude":12.806236, 
-        "longitude": 44.718806,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 12.806236, "lon": 44.718806, "name": "Main Station"}
+        ]
     },
     {
         "city": "عزان",
-        "latitude": 14.325407, 
-        "longitude": 47.446522,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 14.325407, "lon": 47.446522, "name": "Main Station"}
+        ]
     },
     {
         "city": "ميدي",
-        "latitude": 16.314584,
-        "longitude":  42.809573,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 16.314584, "lon": 42.809573, "name": "Main Station"}
+        ]
     },
     {
         "city": "دمت",
-        "latitude": 14.086893, 
-        "longitude": 44.671077,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 14.086893, "lon": 44.671077, "name": "Main Station"}
+        ]
     },
     {
         "city": "الحوطة",
-        "latitude": 15.905814,
-        "longitude":  48.670863,
-        "proximity": 10
+        "waypoints": [
+            {"lat": 15.905814, "lon": 48.670863, "name": "Main Station"}
+        ]
     },
     {
         "city": "تريم",
-        "latitude": 16.056851,
-        "longitude":  49.006646,
-        "proximity": 12
+        "waypoints": [
+            {"lat": 16.056851, "lon": 49.006646, "name": "Main Station"}
+        ]
     },
     {
         "city": "عتق",
-        "latitude": 14.528283, 
-        "longitude": 46.855760,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 14.528283, "lon": 46.855760, "name": "Main Station"}
+        ]
     },
     {
         "city": "المنصورة",
-        "latitude": 13.220718, 
-        "longitude": 44.062132,
-        "proximity": 10
+        "waypoints": [
+            {"lat": 13.220718, "lon": 44.062132, "name": "Main Station"}
+        ]
     },
     {
         "city": "باقم",
-        "latitude": 17.445204, 
-        "longitude": 43.458846,
-        "proximity": 8
+        "waypoints": [
+            {"lat": 17.445204, "lon": 43.458846, "name": "Main Station"}
+        ]
     },
     {
         "city": " الجبين ريمة",
-        "latitude": 14.677741, 
-        "longitude": 43.579960,
-        "proximity": 10
+        "waypoints": [
+            {"lat": 14.677741, "lon": 43.579960, "name": "Main Station"}
+        ]
     },
     {
         "city": "صرواح",
-        "latitude": 15.450222, 
-        "longitude": 45.020515,
-        "proximity": 4
+        "waypoints": [
+            {"lat": 15.450222, "lon": 45.020515, "name": "Main Station"}
+        ]
     },
     {
         "city": "دوعن",
-        "latitude": 15.507598, 
-        "longitude": 48.331440,
-        "proximity": 15
+        "waypoints": [
+            {"lat": 15.507598, "lon": 48.331440, "name": "Main Station"}
+        ]
     },
     {
         "city": "المخا",
-        "latitude": 13.320257, 
-        "longitude": 43.259678,
-        "proximity": 10
+        "waypoints": [
+            {"lat": 13.320257, "lon": 43.259678, "name": "Main Station"}
+        ]
     },
     {
         "city": "قعطبة",
-        "latitude": 13.853247, 
-        "longitude": 44.702910,
-        "proximity": 8
+        "waypoints": [
+            {"lat": 13.853247, "lon": 44.702910, "name": "Main Station"}
+        ]
     },
     {
         "city": "مودية",
-        "latitude": 13.932610, 
-        "longitude": 46.080298,
-        "proximity": 8
+        "waypoints": [
+            {"lat": 13.932610, "lon": 46.080298, "name": "Main Station"}
+        ]
     },
     {
         "city": "خور مكسر",
-        "latitude": 12.810157, 
-        "longitude": 45.033206,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 12.810157, "lon": 45.033206, "name": "Main Station"}
+        ]
     },
     {
         "city": "كريتر",
-        "latitude": 12.780910, 
-        "longitude": 45.039724,
-        "proximity": 3
+        "waypoints": [
+            {"lat": 12.780910, "lon": 45.039724, "name": "Main Station"}
+        ]
     },
     {
         "city": "الشيخ عثمان",
-        "latitude": 12.884008, 
-        "longitude": 45.025758,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 12.884008, "lon": 45.025758, "name": "Main Station"}
+        ]
     },{
         "city": "وادي العين",
-        "latitude": 15.494094, 
-        "longitude": 48.420756 ,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 15.494094, "lon": 48.420756, "name": "Main Station"}
+        ]
     },{
         "city": "شحن",
-        "latitude": 17.778447, 
-        "longitude": 52.490466,
-        "proximity": 5
+        "waypoints": [
+            {"lat": 17.778447, "lon": 52.490466, "name": "Main Station"}
+        ]
     },
     {
         "city": "العبر",
-        "latitude": 16.155225, 
-        "longitude": 47.167248, 
-        "proximity": 3
+        "waypoints": [
+            {"lat": 16.155225, "lon": 47.167248, "name": "Main Station"}
+        ]
     }
 ]

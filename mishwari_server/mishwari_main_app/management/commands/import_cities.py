@@ -12,16 +12,23 @@ class Command(BaseCommand):
     def handle(self, *args, **kwargs):
         json_file_path = kwargs['json_file']
         try:
-            with open(json_file_path, 'r',encoding='utf-8') as file:
+            with open(json_file_path, 'r', encoding='utf-8') as file:
                 cities = json.load(file)
-                for city in cities:
+                for city_data in cities:
+                    # Support both new format (waypoints) and old format (lat/lon)
+                    if 'waypoints' in city_data:
+                        waypoints = city_data['waypoints']
+                    else:
+                        # Convert old format to new
+                        waypoints = [{
+                            'lat': city_data['latitude'],
+                            'lon': city_data['longitude'],
+                            'name': 'Main Station'
+                        }]
+                    
                     CityList.objects.get_or_create(
-                        city=city['city'],
-                        defaults={
-                            'latitude': city['latitude'],
-                            'longitude': city['longitude'],
-                            'proximity': city['proximity']
-                        }
+                        city=city_data['city'],
+                        defaults={'waypoints': waypoints}
                     )
             self.stdout.write(self.style.SUCCESS('Successfully added cities'))
         except FileNotFoundError:

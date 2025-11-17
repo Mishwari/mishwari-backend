@@ -47,7 +47,7 @@ router.register(r"profile",ProfileView,basename="profile")
 # Operator endpoints
 router.register(r"operator/fleet", OperatorFleetViewSet, basename="operator-fleet")
 router.register(r"operator/trips", OperatorTripViewSet, basename="operator-trips")
-router.register(r"operator/bookings", PhysicalBookingViewSet, basename="operator-bookings")
+router.register(r"operator/physical-bookings", PhysicalBookingViewSet, basename="operator-physical-bookings")
 router.register(r"operator/drivers", DriverManagementViewSet, basename="operator-drivers")
 router.register(r"operator/upgrade", UpgradeRequestViewSet, basename="operator-upgrade")
 

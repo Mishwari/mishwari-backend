@@ -46,8 +46,9 @@ def create_booking_atomic(trip_id, from_stop_id, to_stop_id, user, passengers_da
     # Calculate crossed segments
     segments = [f"{i}-{i+1}" for i in range(from_stop.sequence, to_stop.sequence)]
     
-    # Check availability
-    passenger_count = len(passengers_data)
+    # Filter only checked passengers for booking
+    checked_passengers = [p for p in passengers_data if p.get('is_checked', False)]
+    passenger_count = len(checked_passengers)
     
     if not trip.seat_matrix:
         raise InsufficientSeatsError("Seat matrix not initialized")
@@ -64,8 +65,8 @@ def create_booking_atomic(trip_id, from_stop_id, to_stop_id, user, passengers_da
     
     trip.save()
     
-    # Calculate fare
-    fare = (to_stop.price_from_start - from_stop.price_from_start) * passenger_count
+    # Calculate fare based on checked passengers
+    fare = (to_stop.price_from_start - from_stop.price_from_start) * len(checked_passengers)
     
     # Create booking
     booking = Booking.objects.create(
@@ -82,22 +83,49 @@ def create_booking_atomic(trip_id, from_stop_id, to_stop_id, user, passengers_da
     # Create passengers and assign seats
     available_seats = get_available_seats_for_segments(trip, segments, passenger_count)
     
-    for i, passenger_data in enumerate(passengers_data):
-        passenger = Passenger.objects.create(
-            user=user,
-            name=passenger_data.get('name'),
-            age=passenger_data.get('age'),
-            gender=passenger_data.get('gender'),
-            phone=passenger_data.get('phone'),
-            email=passenger_data.get('email')
-        )
+
+    
+    for i, passenger_data in enumerate(checked_passengers):
+        passenger_id = passenger_data.get('id')
+        
+        if passenger_id:
+            try:
+                passenger = Passenger.objects.get(id=passenger_id, user=user)
+            except Passenger.DoesNotExist:
+                passenger = Passenger.objects.filter(
+                    user=user,
+                    name=passenger_data.get('name'),
+                    phone=passenger_data.get('phone')
+                ).first()
+        else:
+            passenger = Passenger.objects.filter(
+                user=user,
+                name=passenger_data.get('name'),
+                phone=passenger_data.get('phone')
+            ).first()
+        
+        if not passenger:
+            passenger = Passenger.objects.create(
+                user=user,
+                name=passenger_data.get('name'),
+                age=passenger_data.get('age'),
+                gender=passenger_data.get('gender'),
+                phone=passenger_data.get('phone'),
+                email=passenger_data.get('email'),
+                is_checked=True
+            )
         
         seat = available_seats[i] if i < len(available_seats) else None
         
         BookingPassenger.objects.create(
             booking=booking,
             passenger=passenger,
-            seat=seat
+            seat=seat,
+            name=passenger_data.get('name'),
+            email=passenger_data.get('email'),
+            phone=passenger_data.get('phone'),
+            age=passenger_data.get('age'),
+            gender=passenger_data.get('gender')
         )
         
         # Remove segments from seat availability

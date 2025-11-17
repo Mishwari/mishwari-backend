@@ -60,45 +60,80 @@ class MobileLoginView(viewsets.ViewSet):
         )
 
         print(f'sending otp {otp_code} to mobile {mobile_number}')
-        # message_body = f"Your verification code is: {otp_code}"
-
-        # return Response({'message': 'OTP sent successfully via Fast2SMS '}, status=status.HTTP_200_OK)
-        return Response({'message': 'OTP Printed successfully '}, status=status.HTTP_200_OK)
-        try:
-            response = self.send_whatsapp_message(mobile_number, otp_code)
-            # response = send_otp_via_fast2sms(mobile_number, otp_code)
-            print("status",response.status_code)
-            if response.status_code == 200:  #get('return', False):
-                return Response({'message': 'OTP sent successfully via Whatsapp '}, status=status.HTTP_200_OK)
-            else:
-                print('failed to send')
-                return Response({'error': 'Failed to send OTP via Whatsapp'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
         
-        except Exception as e:
-            print('error to send')
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        result = self.send_otp_via_infobip(mobile_number, otp_code)
+        if result['status'] == 'success':
+            return Response({'message': 'OTP sent successfully via SMS'}, status=status.HTTP_200_OK)
+        else:
+            print(f"Twilio error: {result['message']}")
+            return Response({'message': f"OTP: {otp_code} (SMS failed: {result['message']})"}, status=status.HTTP_200_OK)
         
 
     def send_otp_via_twilio(self, phone_number, otp_code):
         try:
-            # Twilio credentials from environment variables
-            print('sending')
-            account_sid =""
-            auth_token = ""
-            twilio_phone_number = ""
+            account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+            auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+            twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
 
+            print(f"Twilio config check - SID: {bool(account_sid)}, Token: {bool(auth_token)}, Phone: {bool(twilio_phone_number)}")
+
+            if not all([account_sid, auth_token, twilio_phone_number]):
+                return {"status": "error", "message": "Twilio credentials not configured"}
+
+            if not phone_number.startswith('+'):
+                phone_number = '+' + phone_number
+
+            print(f"Sending to: {phone_number}")
             client = Client(account_sid, auth_token)
-
             message = client.messages.create(
                 body=f"Your OTP code is {otp_code}",
                 from_=twilio_phone_number,
                 to=phone_number
             )
-            print(message)
+            print(f"Message sent successfully: {message.sid}")
             return {"status": "success", "sid": message.sid}
         except Exception as e:
-            print("Error", e)
+            print(f"Twilio exception: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def send_otp_via_infobip(self, phone_number, otp_code):
+        try:
+            api_key = os.getenv('INFOBIP_API_KEY')
+            base_url = os.getenv('INFOBIP_BASE_URL')
+            sender = os.getenv('INFOBIP_SENDER', 'InfoSMS')
+
+            if not all([api_key, base_url]):
+                return {"status": "error", "message": "Infobip credentials not configured"}
+
+            if not base_url.startswith('http'):
+                base_url = 'https://' + base_url
+
+            if not phone_number.startswith('+'):
+                phone_number = '+' + phone_number
+
+            url = f"{base_url}/sms/2/text/advanced"
+            headers = {
+                "Authorization": f"App {api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "messages": [{
+                    "from": sender,
+                    "destinations": [{"to": phone_number}],
+                    "text": f"Your OTP code is {otp_code}"
+                }]
+            }
+
+            response = requests.post(url, json=payload, headers=headers)
+            print(f"Infobip response status: {response.status_code}")
+            print(f"Infobip response: {response.text}")
+            if response.status_code == 200:
+                return {"status": "success", "response": response.json()}
+            else:
+                return {"status": "error", "message": response.text}
+        except Exception as e:
             return {"status": "error", "message": str(e)}
         
     def send_whatsapp_message(self, phone_number, otp_code):

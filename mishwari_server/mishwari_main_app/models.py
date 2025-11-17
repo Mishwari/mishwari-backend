@@ -50,23 +50,26 @@ class Profile(models.Model):
 
 
 class CityList(models.Model):
-    city = models.CharField(max_length=16,null=False,blank=False, unique=True)
-    latitude = models.DecimalField(max_digits=10,decimal_places=6)
-    longitude = models.DecimalField(max_digits=10,decimal_places=6)
-    proximity = models.FloatField(default=1.0, help_text="Proximity from the nearest point of the poly line")
-
-    class Meta: 
-        constraints = [
-            models.UniqueConstraint(fields=['latitude', 'longitude'], name='Unique Coordinates')
-        ]
+    city = models.CharField(max_length=16, null=False, blank=False, unique=True)
+    waypoints = models.JSONField(default=list)
+    # Format: [{"lat": 24.7136, "lon": 46.6753, "name": "City Center"}, ...]
 
     def __str__(self):
-        return f"{self.city} coords: {self.latitude}, {self.longitude}"
+        return f"{self.city} - {len(self.waypoints)} waypoint(s)"
     
-
+    @property
+    def latitude(self):
+        return self.waypoints[0]['lat'] if self.waypoints else None
+    
+    @property
+    def longitude(self):
+        return self.waypoints[0]['lon'] if self.waypoints else None
+    
     @property
     def coordinates(self):
-        return f"{self.latitude}, {self.longitude}"
+        if self.waypoints:
+            return f"{self.waypoints[0]['lat']}, {self.waypoints[0]['lon']}"
+        return None
     
 
     # booking 
@@ -75,6 +78,7 @@ class BusOperator(models.Model):
     name = models.CharField(max_length=100)
     contact_info = models.CharField(max_length=100)
     uses_own_system = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=False)
 
     api_url = models.URLField(max_length=200, blank=True, null=True)
     api_key = models.CharField(max_length=200, blank=True, null=True)
@@ -175,7 +179,7 @@ class Trip(models.Model):
     def clean(self):
         """Validate trip before saving - Golden Rule enforcement"""
         if self.status == 'published':
-            if not self.operator.profile_set.first().is_verified:
+            if not self.operator.is_verified:
                 raise ValidationError("Operator must be verified to publish trips")
             if self.bus and not self.bus.is_verified:
                 raise ValidationError("Bus must be verified to publish trips")
@@ -191,15 +195,11 @@ class Trip(models.Model):
     
     def can_publish(self):
         """Check if trip can be published"""
-        try:
-            operator_profile = self.operator.profile_set.first()
-            return (
-                operator_profile and operator_profile.is_verified and
-                self.bus and self.bus.is_verified and
-                self.driver and self.driver.is_verified
-            )
-        except:
-            return False
+        return (
+            self.operator.is_verified and
+            self.bus and self.bus.is_verified and
+            self.driver and self.driver.is_verified
+        )
     
     def initialize_seat_matrix(self, num_stops):
         """Initialize seat matrix for all segments"""
@@ -266,33 +266,6 @@ class Seat(models.Model):
     def is_available_for_segments(self, segments):
         """Check if seat is available for all given segments"""
         return all(seg in self.available_segments for seg in segments)
-    
-# class Booking(models.Model):
-#     user = models.ForeignKey(User, on_delete=models.CASCADE)
-#     trip = models.ForeignKey(AllTrips, on_delete=models.CASCADE)
-#     seats = models.ManyToManyField(Seat)
-#     booking_time = models.DateTimeField(auto_now_add=True)
-#     is_paid = models.BooleanField(default=False)
-
-#     def __str__(self):
-#         username = self.user.username if self.user else "Unknown User"
-#         booking_date = self.booking_time.strftime('%Y-%m-%d') if self.booking_time else "Pending"
-#         return f"Booking By {username} on {booking_date}"
-
-#     def save(self, *args, **kwargs):
-#         # Using transaction.atomic ensures that all parts of the transaction are successfully completed
-#         with transaction.atomic():
-#             super(Booking, self).save(*args, **kwargs)
-#             self.full_clean()
-
-# # Receiver function to validate the many-to-many seats relationship after being saved
-# @receiver(m2m_changed, sender=Booking.seats.through)
-# def validate_seats(sender, instance, action, **kwargs):
-#     if action == 'post_add':
-#         if any(seat.trip != instance.trip for seat in instance.seats.all()):
-#             raise ValidationError("All seats must belong to the selected trip.")
-#     # Issue: should only the seats of the specific trip available to selects and save 
-
 
 
 # Passenger management
@@ -380,14 +353,31 @@ class BookingPassenger(models.Model):
     """Links passengers to bookings with seat assignments"""
     
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name='passenger_details')
-    passenger = models.ForeignKey(Passenger, on_delete=models.CASCADE)
+    passenger = models.ForeignKey(Passenger, on_delete=models.SET_NULL, null=True, blank=True)
     seat = models.ForeignKey(Seat, on_delete=models.SET_NULL, null=True, blank=True)
+    
+    # Store passenger data to preserve it even if passenger is deleted
+    name = models.CharField(max_length=100, default='Unknown')
+    email = models.EmailField(null=True, blank=True)
+    phone = models.CharField(max_length=15, null=True, blank=True)
+    age = models.IntegerField(null=True, blank=True)
+    gender = models.CharField(max_length=10, null=True, blank=True, choices=genderChoices)
     
     class Meta:
         unique_together = ['booking', 'seat']
 
     def __str__(self):
-        return f"{self.passenger.name} - Seat {self.seat.seat_number if self.seat else 'N/A'}"
+        return f"{self.name} - Seat {self.seat.seat_number if self.seat else 'N/A'}"
+    
+    def save(self, *args, **kwargs):
+        # Copy passenger data if passenger exists and name is default/empty
+        if self.passenger and (not self.name or self.name == 'Unknown'):
+            self.name = self.passenger.name
+            self.email = self.passenger.email
+            self.phone = self.passenger.phone
+            self.age = self.passenger.age
+            self.gender = self.passenger.gender
+        super().save(*args, **kwargs)
     
 
 
