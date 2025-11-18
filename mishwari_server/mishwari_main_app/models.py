@@ -80,6 +80,16 @@ class BusOperator(models.Model):
     uses_own_system = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
 
+    # For platform operators only (null for external API operators)
+    platform_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='owned_operator',
+        help_text="Platform user who owns this operator (null for external operators)"
+    )
+
     api_url = models.URLField(max_length=200, blank=True, null=True)
     api_key = models.CharField(max_length=200, blank=True, null=True)
 
@@ -106,7 +116,7 @@ class Driver(models.Model):
     national_id = models.CharField(max_length=20, null=True, blank=True)
     driver_rating = models.DecimalField(max_digits=5, decimal_places=2)
     driver_license = models.CharField(max_length=16, null=True, blank=True)
-    buses = models.ManyToManyField(Bus, related_name='drivers')
+    buses = models.ManyToManyField(Bus, related_name='drivers', null=True, blank=True)
     operator = models.ForeignKey(BusOperator, on_delete=models.CASCADE )
     is_verified = models.BooleanField(default=False)  # Driver-level verification
     verification_documents = models.JSONField(default=dict, blank=True)  # Store document URLs
@@ -434,13 +444,17 @@ class UpgradeRequest(models.Model):
     def approve_upgrade(self):
         """Approve upgrade and migrate role"""
         with transaction.atomic():
+            # Update profile role
             self.profile.role = 'operator_admin'
             self.profile.save()
             
+            # Update operator details
             driver = Driver.objects.filter(user=self.user).first()
             if driver and driver.operator:
-                driver.operator.name = self.company_name
-                driver.operator.save()
+                operator = driver.operator
+                operator.name = self.company_name
+                operator.save()
+                # Keep Driver record - they're still a driver, just also an admin now
             
             self.status = 'approved'
             self.reviewed_at = timezone.now()

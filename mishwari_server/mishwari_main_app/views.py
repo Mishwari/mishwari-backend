@@ -89,6 +89,14 @@ class TripStopView(viewsets.ModelViewSet):
 
     def get_queryset(self):
         trip_id = self.request.query_params.get('trip', None)
+        
+        # For non-admin users, only show stops for published trips
+        if not self.request.user.is_staff:
+            if trip_id:
+                return TripStop.objects.filter(trip_id=trip_id, trip__status='published')
+            return TripStop.objects.filter(trip__status='published')
+        
+        # Admins can see all stops
         if trip_id:
             return TripStop.objects.filter(trip_id=trip_id)
         return TripStop.objects.all()
@@ -645,21 +653,22 @@ class BookingViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], url_path='cancel')
     def cancel_booking(self, request, pk=None):
-        print("Cancelling")
+        from .booking_utils import cancel_booking_atomic, BookingAlreadyCancelledError
+        
         booking = self.get_object()
-        if booking.status == 'cancelled':
+        
+        # Validate ownership
+        if booking.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to cancel this booking'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            cancel_booking_atomic(booking.id)
+            return Response({'message': 'Booking cancelled successfully.'}, status=status.HTTP_200_OK)
+        except BookingAlreadyCancelledError:
             return Response({'error': 'Booking is already cancelled.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        booking.status = 'cancelled'
-        booking.save()
-
-        # Release all seats associated with this booking
-        seats = Seat.objects.filter(bookingpassenger__booking=booking)
-        for seat in seats:
-            seat.is_booked = False
-            seat.save()
-
-        return Response({'message': 'Booking cancelled successfully.'}, status=status.HTTP_200_OK)
     
 @csrf_exempt
 def stripe_webhook(request):
@@ -718,6 +727,36 @@ class PassengersViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+    
+    def update(self, request, *args, **kwargs):
+        """Override update to validate ownership"""
+        passenger = self.get_object()
+        if passenger.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to update this passenger'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def partial_update(self, request, *args, **kwargs):
+        """Override partial_update to validate ownership"""
+        passenger = self.get_object()
+        if passenger.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to update this passenger'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().partial_update(request, *args, **kwargs)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to validate ownership"""
+        passenger = self.get_object()
+        if passenger.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to delete this passenger'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
     
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()

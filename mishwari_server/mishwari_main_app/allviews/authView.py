@@ -266,13 +266,14 @@ class MobileLoginView(viewsets.ViewSet):
                     role = request.data.get('role', 'passenger')
                     print(f'[REGISTRATION] Creating operator for role: {role}')
                     if role in ['driver', 'operator_admin']:
-                        # Auto-create operator
+                        # Auto-create operator with platform_user link
                         operator = BusOperator.objects.create(
                             name=profile.full_name or user.username,
                             contact_info=profile.mobile_number,
-                            uses_own_system=False
+                            uses_own_system=False,
+                            platform_user=user  # Direct link to platform user
                         )
-                        print(f'[REGISTRATION] Created BusOperator ID: {operator.id}, contact: {operator.contact_info}')
+                        print(f'[REGISTRATION] Created BusOperator ID: {operator.id}, platform_user: {user.username}')
                         
                         # For individual drivers, also create Driver record
                         if role == 'driver':

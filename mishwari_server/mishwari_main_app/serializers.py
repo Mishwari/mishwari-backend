@@ -88,18 +88,23 @@ class BusOperatorSerializer(serializers.ModelSerializer):
     class Meta:
         model = BusOperator
         fields = ["id", "name"]
-class DriverSerializer(serializers.ModelSerializer):
-    operator = BusOperatorSerializer(read_only=True)
-    driver_name = serializers.CharField(source='profile.full_name', read_only=True)
-    
-    class Meta:
-        model = Driver 
-        fields = ['id', 'driver_name', 'driver_rating', 'operator', 'is_verified', 'verification_documents']
 
 class BusSerializer(serializers.ModelSerializer):
     class Meta:
         model = Bus
         fields = ["id", "bus_number","bus_type", "capacity","amenities","is_verified","verification_documents"]
+
+class DriverSerializer(serializers.ModelSerializer):
+    operator = BusOperatorSerializer(read_only=True)
+    driver_name = serializers.CharField(source='profile.full_name', read_only=True)
+    mobile_number = serializers.CharField(source='profile.mobile_number', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    buses = BusSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Driver 
+        fields = ['id', 'driver_name', 'mobile_number', 'email', 'national_id', 'driver_license', 
+                  'driver_rating', 'operator', 'buses', 'is_verified', 'verification_documents']
 
 class CitiesSerializer(serializers.ModelSerializer):
     class Meta:
@@ -236,6 +241,10 @@ class BookingSerializer2(serializers.ModelSerializer):
         checked_passengers = [p for p in passengers if p.get('is_checked', False)]
 
         if trip and from_stop and to_stop:
+            # Validate trip status
+            if trip.status not in ['published', 'active']:
+                raise serializers.ValidationError(f"Cannot book trip with status '{trip.status}'. Only published or active trips can be booked.")
+            
             # Check segment-based availability
             available_seats = get_available_seats_for_journey(trip, from_stop, to_stop)
             

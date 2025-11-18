@@ -7,7 +7,8 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 
-from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, BookingPassenger, Seat, BusOperator, UpgradeRequest, CityList
+from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, BookingPassenger, Seat, BusOperator, UpgradeRequest, CityList, Profile
+from django.contrib.auth.models import User
 from .serializers import BusSerializer, TripsSerializer, BookingSerializer2, DriverSerializer
 from .permissions import IsVerifiedOperator, IsOperatorOrAdmin
 from .booking_utils import create_booking_atomic
@@ -20,6 +21,7 @@ from .route_utils import (
     detect_waypoints_from_polyline
 )
 from .trip_creation_utils import create_trip_from_cached_route
+from .operator_utils import get_operator_for_user
 import polyline
 
 
@@ -28,6 +30,29 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
     serializer_class = BusSerializer
     permission_classes = [IsAuthenticated, IsOperatorOrAdmin]
     authentication_classes = [JWTAuthentication]
+    
+    def create(self, request, *args, **kwargs):
+        """Create bus with role-based validation"""
+        profile = request.user.profile
+        operator = get_operator_for_user(request.user)
+        
+        # Limit individual drivers to 1 bus
+        if profile.role == 'driver':
+            existing_buses = Bus.objects.filter(operator=operator).count()
+            
+            if existing_buses >= 1:
+                return Response({
+                    'error': 'Individual drivers can only register one bus',
+                    'message': 'Upgrade to operator account to add multiple buses',
+                    'upgrade_url': '/upgrade'
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().create(request, *args, **kwargs)
+    
+    def perform_create(self, serializer):
+        """Set operator when creating bus"""
+        operator = get_operator_for_user(self.request.user)
+        serializer.save(operator=operator)
     
     def update(self, request, *args, **kwargs):
         """Override update to uncheck is_verified when bus_number or bus_type changes"""
@@ -50,27 +75,8 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
         return self.update(request, *args, **kwargs)
     
     def get_queryset(self):
-        # For role='driver': Get operator via Driver record
-        # For role='operator_admin': Get operator via profile
-        print(f'[FLEET QUERYSET] User: {self.request.user.username}, Role: {self.request.user.profile.role}')
-        try:
-            driver = Driver.objects.get(user=self.request.user)
-            print(f'[FLEET QUERYSET] Found Driver ID: {driver.id}, Operator ID: {driver.operator.id}')
-            buses = Bus.objects.filter(operator=driver.operator)
-            print(f'[FLEET QUERYSET] Found {buses.count()} buses')
-            return buses
-        except Driver.DoesNotExist:
-            # operator_admin case: find operator by profile
-            profile = self.request.user.profile
-            print(f'[FLEET QUERYSET] No Driver found, searching BusOperator by mobile: {profile.mobile_number}')
-            operators = BusOperator.objects.filter(contact_info=profile.mobile_number)
-            if operators.exists():
-                print(f'[FLEET QUERYSET] Found BusOperator ID: {operators.first().id}')
-                buses = Bus.objects.filter(operator=operators.first())
-                print(f'[FLEET QUERYSET] Found {buses.count()} buses')
-                return buses
-            print(f'[FLEET QUERYSET] No BusOperator found! Returning empty queryset')
-            return Bus.objects.none()
+        operator = get_operator_for_user(self.request.user)
+        return Bus.objects.filter(operator=operator)
     
     @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):
@@ -96,24 +102,8 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
     authentication_classes = [JWTAuthentication]
     
     def get_queryset(self):
-        # For role='driver': Get operator via Driver record
-        # For role='operator_admin': Get operator via profile
-        print(f'[TRIPS QUERYSET] User: {self.request.user.username}, Role: {self.request.user.profile.role}')
-        try:
-            driver = Driver.objects.get(user=self.request.user)
-            print(f'[TRIPS QUERYSET] Found Driver ID: {driver.id}, Operator ID: {driver.operator.id}')
-            queryset = Trip.objects.filter(operator=driver.operator)
-        except Driver.DoesNotExist:
-            # operator_admin case: find operator by profile
-            profile = self.request.user.profile
-            print(f'[TRIPS QUERYSET] No Driver found, searching BusOperator by mobile: {profile.mobile_number}')
-            operators = BusOperator.objects.filter(contact_info=profile.mobile_number)
-            if operators.exists():
-                print(f'[TRIPS QUERYSET] Found BusOperator ID: {operators.first().id}')
-                queryset = Trip.objects.filter(operator=operators.first())
-            else:
-                print(f'[TRIPS QUERYSET] No BusOperator found! Returning empty queryset')
-                return Trip.objects.none()
+        operator = get_operator_for_user(self.request.user)
+        queryset = Trip.objects.filter(operator=operator)
         
         # Filter by status if provided
         status_filter = self.request.query_params.get('status')
@@ -123,22 +113,32 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
         return queryset
     
     def create(self, request, *args, **kwargs):
-        """Create trip as draft by default"""
+        """Create trip with role-based validation"""
+        profile = request.user.profile
+        operator = get_operator_for_user(request.user)
+        
+        # Enforce trip limit for individual drivers
+        if profile.role == 'driver':
+            active_trips = Trip.objects.filter(
+                operator=operator,
+                status__in=['draft', 'published', 'active']
+            ).count()
+            
+            trip_limit = getattr(operator.metrics, 'trip_limit', 2) if hasattr(operator, 'metrics') else 2
+            
+            if active_trips >= trip_limit:
+                return Response({
+                    'error': f'Trip limit reached ({trip_limit} concurrent trips)',
+                    'message': 'Complete or cancel existing trips, or upgrade your account',
+                    'current_trips': active_trips,
+                    'limit': trip_limit
+                }, status=status.HTTP_403_FORBIDDEN)
+        
         data = request.data.copy()
         if 'status' not in data:
             data['status'] = 'draft'
         
-        # Set operator based on user role
-        try:
-            driver = Driver.objects.get(user=request.user)
-            data['operator'] = driver.operator.id
-        except Driver.DoesNotExist:
-            # operator_admin case
-            profile = request.user.profile
-            operator = BusOperator.objects.filter(contact_info=profile.mobile_number).first()
-            if operator:
-                data['operator'] = operator.id
-        
+        data['operator'] = operator.id
         request._full_data = data
         return super().create(request, *args, **kwargs)
     
@@ -324,11 +324,19 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
         try:
             selected_route = cached_data['routes'][int(route_index)]
             
-            driver = Driver.objects.get(user=request.user)
-            bus = Bus.objects.get(id=request.data['bus'], operator=driver.operator)
+            operator = get_operator_for_user(request.user)
+            
+            # Get driver - either from request data (operator_admin) or current user (individual driver)
+            driver_id = request.data.get('driver')
+            if driver_id:
+                driver = Driver.objects.get(id=driver_id, operator=operator)
+            else:
+                driver = Driver.objects.filter(user=request.user).first()
+            
+            bus = Bus.objects.get(id=request.data['bus'], operator=operator)
             
             trip = create_trip_from_cached_route(
-                operator=driver.operator,
+                operator=operator,
                 bus=bus,
                 driver=driver,
                 cached_data=cached_data,
@@ -343,10 +351,10 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(trip)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
             
-        except Driver.DoesNotExist:
-            return Response({'error': 'Driver not found'}, status=status.HTTP_404_NOT_FOUND)
         except Bus.DoesNotExist:
             return Response({'error': 'Bus not found or not owned by operator'}, status=status.HTTP_404_NOT_FOUND)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -363,8 +371,19 @@ class PhysicalBookingViewSet(viewsets.ModelViewSet):
     
     def create(self, request):
         """Create physical booking"""
+        trip_id = request.data.get('trip')
+        
+        # Verify operator owns this trip
+        operator = get_operator_for_user(request.user)
+        try:
+            trip = Trip.objects.get(id=trip_id, operator=operator)
+        except Trip.DoesNotExist:
+            return Response(
+                {'error': 'Trip not found or you do not have permission to book for this trip'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         with transaction.atomic():
-            trip_id = request.data.get('trip')
             from_stop_id = request.data.get('from_stop')
             to_stop_id = request.data.get('to_stop')
             passengers_data = request.data.get('passengers', [])
@@ -395,22 +414,60 @@ class DriverManagementViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """Get drivers for current operator"""
+        operator = get_operator_for_user(self.request.user)
+        return Driver.objects.filter(operator=operator)
+    
+    def create(self, request):
+        """Create driver account (operator_admin only)"""
+        if request.user.profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can add drivers'}, status=status.HTTP_403_FORBIDDEN)
+        
+        mobile_number = request.data.get('mobile_number')
+        full_name = request.data.get('full_name')
+        national_id = request.data.get('national_id', '')
+        driver_license = request.data.get('driver_license', '')
+        email = request.data.get('email', '')
+        
+        if not mobile_number or not full_name:
+            return Response({'error': 'mobile_number and full_name are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if mobile number already exists
+        if Profile.objects.filter(mobile_number=mobile_number).exists():
+            return Response({'error': 'Mobile number already registered'}, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
-            driver = Driver.objects.get(user=self.request.user)
-            print(f'[DRIVER MGMT QUERYSET] Found Driver ID: {driver.id}, Operator ID: {driver.operator.id}')
-            return Driver.objects.filter(operator=driver.operator)
-        except Driver.DoesNotExist:
-            profile = self.request.user.profile
-            print(f'[DRIVER MGMT QUERYSET] Profile ID: {profile.id}, Role: {profile.role}')
-            operator = BusOperator.objects.filter(contact_info=profile.mobile_number).first()
-            print(f'[DRIVER MGMT QUERYSET] Operator ID: {operator.id}')
-            if operator:
-                return Driver.objects.filter(operator=operator)
-            return Driver.objects.none()
+            with transaction.atomic():
+                # Create User
+                username = f"driver_{mobile_number}"
+                user = User.objects.create_user(username=username, email=email or '')
+                
+                # Create Profile
+                profile = Profile.objects.create(
+                    user=user,
+                    mobile_number=mobile_number,
+                    full_name=full_name,
+                    role='driver'
+                )
+                
+                # Create Driver
+                operator = get_operator_for_user(request.user)
+                driver = Driver.objects.create(
+                    user=user,
+                    profile=profile,
+                    national_id=national_id,
+                    driver_license=driver_license,
+                    driver_rating=0.0,
+                    operator=operator
+                )
+                
+                serializer = self.get_serializer(driver)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['post'])
     def invite(self, request):
-        """Invite driver by phone number (operator_admin only)"""
+        """Invite driver by phone number (operator_admin only) - Manual process for now"""
         if request.user.profile.role != 'operator_admin':
             return Response({'error': 'Only operator_admin can invite drivers'}, status=status.HTTP_403_FORBIDDEN)
         
@@ -418,16 +475,10 @@ class DriverManagementViewSet(viewsets.ModelViewSet):
         if not phone:
             return Response({'error': 'Phone number required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get operator
-        profile = request.user.profile
-        operator = BusOperator.objects.filter(contact_info=profile.mobile_number).first()
-        if not operator:
-            return Response({'error': 'Operator not found'}, status=status.HTTP_404_NOT_FOUND)
-        
-        # TODO: Send SMS invitation
-        # For now, just return success
+        # TODO: Implement SMS invitation system
+        # For now, operators should add drivers manually
         return Response({
-            'message': f'Invitation sent to {phone}',
+            'message': 'Driver invitation feature coming soon. Please add drivers manually for now.',
             'phone': phone
         }, status=status.HTTP_200_OK)
     
@@ -435,6 +486,14 @@ class DriverManagementViewSet(viewsets.ModelViewSet):
     def verify(self, request, pk=None):
         """Upload driver verification documents"""
         driver = self.get_object()
+        
+        # Validate ownership - driver must belong to current operator
+        operator = get_operator_for_user(request.user)
+        if driver.operator != operator:
+            return Response(
+                {'error': 'You do not have permission to verify this driver'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         documents = request.data.get('documents', {})
         driver.verification_documents = documents
@@ -458,12 +517,18 @@ class UpgradeRequestViewSet(viewsets.ModelViewSet):
     def create(self, request):
         """Submit upgrade request"""
         if request.user.profile.role != 'driver':
-            return Response({'error': 'Only drivers can request upgrade'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                'error': 'Only individual drivers can request upgrade'
+            }, status=status.HTTP_403_FORBIDDEN)
         
         # Check if already has pending request
         existing = UpgradeRequest.objects.filter(user=request.user, status='pending').first()
         if existing:
-            return Response({'error': 'You already have a pending upgrade request'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                'error': 'You already have a pending upgrade request',
+                'request_id': existing.id,
+                'submitted_at': existing.created_at
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         upgrade_request = UpgradeRequest.objects.create(
             user=request.user,

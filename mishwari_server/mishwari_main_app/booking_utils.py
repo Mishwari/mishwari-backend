@@ -46,8 +46,9 @@ def create_booking_atomic(trip_id, from_stop_id, to_stop_id, user, passengers_da
     # Calculate crossed segments
     segments = [f"{i}-{i+1}" for i in range(from_stop.sequence, to_stop.sequence)]
     
-    # Filter only checked passengers for booking
-    checked_passengers = [p for p in passengers_data if p.get('is_checked', False)]
+    # Filter only checked passengers for booking (if is_checked field exists)
+    # For physical bookings, all passengers are considered checked
+    checked_passengers = [p for p in passengers_data if p.get('is_checked', True)]
     passenger_count = len(checked_passengers)
     
     if not trip.seat_matrix:
