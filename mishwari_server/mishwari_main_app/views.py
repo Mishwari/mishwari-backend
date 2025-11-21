@@ -337,7 +337,7 @@ class RouteViewSet(viewsets.ViewSet):
             return Response({'message': 'provide start and end'}, status=status.HTTP_400_BAD_REQUEST)
         
         gmaps = googlemaps.Client(key=self.api_key)
-        all_routes = gmaps.directions(startCoords, endCoords,mode='driving', alternatives=True)
+        all_routes = gmaps.directions(startCoords, endCoords, mode='driving', alternatives=True, region='ye')
 
         cache.set(cache_key_routes, all_routes, timeout=3600)
 
@@ -377,6 +377,9 @@ class RouteViewSet(viewsets.ViewSet):
             matched_cities = {}
             
             for city in cities:
+                best_waypoint = None
+                best_distance = None
+                
                 for waypoint in city.waypoints:
                     coords = (waypoint['lat'], waypoint['lon'])
                     
@@ -388,10 +391,14 @@ class RouteViewSet(viewsets.ViewSet):
                                 (nearest_point.x, nearest_point.y)
                             )
                             
-                            # Keep earliest waypoint on route
-                            if city.city not in matched_cities or distance_along_route < matched_cities[city.city][1]:
-                                matched_cities[city.city] = (f"{waypoint['lat']}, {waypoint['lon']}", distance_along_route)
-                        break  # Found match, skip other waypoints
+                            # Keep earliest waypoint on route for this city
+                            if best_distance is None or distance_along_route < best_distance:
+                                best_waypoint = waypoint
+                                best_distance = distance_along_route
+                
+                # Add city only once with its best waypoint
+                if best_waypoint is not None:
+                    matched_cities[city.city] = (f"{best_waypoint['lat']}, {best_waypoint['lon']}", best_distance)
             
             close_cities = [(name, coords, dist) for name, (coords, dist) in matched_cities.items()]
             close_cities = sorted(close_cities, key=lambda x: x[2])
@@ -403,7 +410,7 @@ class RouteViewSet(viewsets.ViewSet):
 
             gmaps = googlemaps.Client(key=self.api_key)
             waypoints_param = [wp[1] for wp in close_cities]  # Extract coordinates
-            new_route = gmaps.directions(next(iter(start_city.items()))[1], next(iter(end_city.items()))[1], waypoints=waypoints_param, mode='driving')
+            new_route = gmaps.directions(next(iter(start_city.items()))[1], next(iter(end_city.items()))[1], waypoints=waypoints_param, mode='driving', region='ye')
 
 
             cache.set(cache_key_new_route, new_route, timeout=3600) # to be used for creating later

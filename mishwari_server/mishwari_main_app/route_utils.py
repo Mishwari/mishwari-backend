@@ -56,19 +56,21 @@ def detect_waypoints_from_polyline(polyline_points, from_city, to_city):
     matched_cities = {}
     
     for city in cities:
+        best_distance = None
+        
         for waypoint in city.waypoints:
             point = (float(waypoint['lat']), float(waypoint['lon']))
             if is_point_near_polyline(point, polyline_points, PROXIMITY_KM):
                 distance = calculate_distance_along_route(polyline_points, point)
                 
-                # Keep earliest waypoint on route
-                if city.id not in matched_cities or distance < matched_cities[city.id]['distance_from_start_km']:
+                # Keep earliest waypoint on route for this city
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
                     matched_cities[city.id] = {
                         'city_id': city.id,
                         'city_name': city.city,
                         'distance_from_start_km': distance
                     }
-                break  # Found match, skip other waypoints
     
     waypoints = list(matched_cities.values())
     waypoints.sort(key=lambda x: x['distance_from_start_km'])
