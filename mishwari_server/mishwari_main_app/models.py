@@ -39,7 +39,7 @@ class Profile(models.Model):
     birth_date = models.CharField(max_length=20, blank=True, null=True)
     gender = models.CharField(max_length=10, null=True, blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='passenger')
-    is_verified = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=True) # To be false later
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -78,7 +78,7 @@ class BusOperator(models.Model):
     name = models.CharField(max_length=100)
     contact_info = models.CharField(max_length=100)
     uses_own_system = models.BooleanField(default=False)
-    is_verified = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=True) # To be false later 
 
     # For platform operators only (null for external API operators)
     platform_user = models.ForeignKey(
@@ -104,7 +104,7 @@ class Bus(models.Model):
     bus_type = models.CharField(max_length=30, null=False, blank=False)
     capacity = models.IntegerField()
     amenities = models.JSONField(default=dict)  # Stores amenities as key-value pairs, such as AC, Wi-Fi, etc.
-    is_verified = models.BooleanField(default=False)  # Bus-level verification
+    is_verified = models.BooleanField(default=True)  # To be false later
     verification_documents = models.JSONField(default=dict, blank=True)  # Store document URLs
 
     def __str__(self):
@@ -118,7 +118,7 @@ class Driver(models.Model):
     driver_license = models.CharField(max_length=16, null=True, blank=True)
     buses = models.ManyToManyField(Bus, related_name='drivers', null=True, blank=True)
     operator = models.ForeignKey(BusOperator, on_delete=models.CASCADE )
-    is_verified = models.BooleanField(default=False)  # Driver-level verification
+    is_verified = models.BooleanField(default=True)  # To be false later
     verification_documents = models.JSONField(default=dict, blank=True)  # Store document URLs
 
     
