@@ -14,22 +14,14 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 import os
 from dotenv import load_dotenv
-
 from pathlib import Path
 from datetime import timedelta
-# from decouple import config
-
-
-# Load .env file
-env_path = Path('.') / '.env'
-load_dotenv(dotenv_path=env_path)
-
-# WHATSAPP_SECRET_KEY = os.getenv('WHATSAPP_SECRET_KEY')
-
-
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load .env file
+load_dotenv(dotenv_path=BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
