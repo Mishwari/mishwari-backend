@@ -20,11 +20,18 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env file - check both locations (dev: mishwari_server/.env, prod: root/.env)
+# Load .env file - check multiple locations
+# 1. mishwari_server/.env (dev)
+# 2. mishwari-backend/.env 
+# 3. /var/www/mishwari/.env (prod root)
 if (BASE_DIR / '.env').exists():
     load_dotenv(dotenv_path=BASE_DIR / '.env')
-else:
+elif (BASE_DIR.parent / '.env').exists():
     load_dotenv(dotenv_path=BASE_DIR.parent / '.env')
+elif (BASE_DIR.parent.parent / '.env').exists():
+    load_dotenv(dotenv_path=BASE_DIR.parent.parent / '.env')
+else:
+    load_dotenv()
 
 
 # Quick-start development settings - unsuitable for production

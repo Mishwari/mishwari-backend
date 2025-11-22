@@ -10,7 +10,7 @@ from .models import CityList
 
 def get_google_maps_client():
     api_key = getattr(settings, 'GOOGLE_MAPS_API_KEY', None)
-    if not api_key:
+    if not api_key or api_key == '':
         raise ValueError("GOOGLE_MAPS_API_KEY not configured in settings")
     return googlemaps.Client(key=api_key)
 
