@@ -368,7 +368,7 @@ class MobileLoginView(viewsets.ViewSet):
     
 
 class ProfileView(viewsets.ModelViewSet):
-    serializer_class = ProfileCompletionSerializer
+    serializer_class = ProfileSerializer
     permission_classes = [IsAuthenticated]
     authentication_classes = [JWTAuthentication]
 

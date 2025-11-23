@@ -346,6 +346,13 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
                 custom_prices=request.data.get('custom_prices', {})
             )
             
+            # Auto-publish if requested and golden rule is satisfied
+            auto_publish = request.data.get('auto_publish', False)
+            if auto_publish and trip.can_publish():
+                trip.status = 'published'
+                trip.full_clean()
+                trip.save()
+            
             clear_route_session(session_id)
             
             serializer = self.get_serializer(trip)

@@ -47,22 +47,47 @@ class BookingAdminForm(forms.ModelForm):
 class BookingAdmin(admin.ModelAdmin):
     form = BookingAdminForm
     list_display = ['user', 'trip', 'booking_time', 'is_paid','status']
+    search_fields = ['user__username', 'trip__id']
 
     # def save_model(self, request, obj, form, change):
     #     if form.is_valid():
     #         obj.save()
 
-admin.site.register(Seat)
+# admin.site.register(Seat)
+@admin.register(Seat)
+class SeatAdmin(admin.ModelAdmin):
+    list_display = ['trip', 'seat_number', 'available_segments']
+    search_fields = ['trip__id', 'seat_number']
 
-admin.site.register(Bus)
+# admin.site.register(Bus)
+@admin.register(Bus)
+class BusAdmin(admin.ModelAdmin):
+    list_display = ['operator', 'bus_number', 'bus_type', 'capacity', 'is_verified']
+    search_fields = ['operator__name', 'bus_number']
 
-admin.site.register(BusOperator)
+# admin.site.register(BusOperator)
+@admin.register(BusOperator)
+class BusOperatorAdmin(admin.ModelAdmin):
+    list_display = ['name', 'contact_info', 'uses_own_system', 'is_verified', 'platform_user']
+    search_fields = ['name', 'contact_info']
 
-admin.site.register(Passenger)
+# admin.site.register(Passenger)
+@admin.register(Passenger)
+class PassengerAdmin(admin.ModelAdmin):
+    list_display = ['user', 'name', 'phone', 'email', 'age', 'gender']
+    search_fields = ['user__username', 'name', 'phone', 'email']
 
-admin.site.register(BookingPassenger)
+# admin.site.register(BookingPassenger)
+@admin.register(BookingPassenger)
+class BookingPassengerAdmin(admin.ModelAdmin):
+    list_display = ['booking', 'passenger', 'seat', 'name', 'email', 'phone', 'age', 'gender']
+    search_fields = ['booking__id', 'passenger__full_name', 'seat__seat_number']
 
-admin.site.register(TemporaryMobileVerification)
+# admin.site.register(TemporaryMobileVerification)
+@admin.register(TemporaryMobileVerification)
+class TemporaryMobileVerificationAdmin(admin.ModelAdmin):
+    list_display = ['mobile_number', 'otp_code', 'is_verified', 'otp_sent_at', 'attempts']
+    search_fields = ['mobile_number', 'otp_code']
 
 @admin.register(Profile)
 class ProfileAdmin(admin.ModelAdmin):
