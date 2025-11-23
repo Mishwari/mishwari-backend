@@ -1,5 +1,6 @@
 from django.db import transaction
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from .models import Trip, TripStop, Seat, CityList
 from .route_utils import calculate_distance_along_route
 import polyline as polyline_lib
@@ -14,8 +15,8 @@ def create_trip_from_cached_route(operator, bus, driver, cached_data, selected_r
     # Get total distance and price
     main_leg = selected_route['legs'][0]
     total_distance_km = main_leg['distance']['value'] / 1000
-    total_price = float(trip_data.get('total_price', 0))
-    price_per_km = total_price / total_distance_km if total_distance_km > 0 else 0
+    total_price = Decimal(str(trip_data.get('total_price', 0)))
+    price_per_km = (total_price / Decimal(str(total_distance_km))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if total_distance_km > 0 else Decimal('0.00')
     
     # Get polyline for distance calculations
     polyline_points = polyline_lib.decode(selected_route['overview_polyline']['points'])
@@ -92,7 +93,7 @@ def create_trip_from_cached_route(operator, bus, driver, cached_data, selected_r
         elif city.id == cached_data['to_city']['id']:
             price = int(total_price)
         else:
-            price = int(distance * price_per_km)
+            price = int(Decimal(str(distance)) * price_per_km)
         
         # Estimate duration (60 km/h average)
         duration_seconds = int((distance / 60) * 3600) if distance > 0 else 0
