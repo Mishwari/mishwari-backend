@@ -19,3 +19,8 @@ class IsVerifiedOperator(BasePermission):
         return (hasattr(request.user, 'profile') and 
                 request.user.profile.is_verified and 
                 request.user.profile.role in ['driver', 'operator_admin'])
+
+class IsAuthenticatedOrPartial(BasePermission):
+    """Allow access for authenticated users including those with partial status (no profile yet)"""
+    def has_permission(self, request, view):
+        return request.user and request.user.is_authenticated

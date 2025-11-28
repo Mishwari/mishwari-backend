@@ -86,6 +86,7 @@ class JwtDriverView(viewsets.ModelViewSet):
 from django.shortcuts import get_object_or_404
 class TripStopView(viewsets.ModelViewSet):
     serializer_class = TripStopSerializer
+    authentication_classes = []
 
     def get_queryset(self):
         trip_id = self.request.query_params.get('trip', None)
@@ -117,6 +118,7 @@ class TripStopView(viewsets.ModelViewSet):
 class TripSearchView(viewsets.ViewSet):
     """Search trips - supports partial journeys"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def list(self, request):
         from_city = self.request.query_params.get('pickup') or self.request.query_params.get('from_city')
@@ -204,7 +206,7 @@ class CitiesView(viewsets.ModelViewSet):
             return [AllowAny()]
         return [IsAdminUser()]
     
-    @action(detail=False, methods=['get'], url_path='departure-cities')
+    @action(detail=False, methods=['get'], url_path='departure-cities', permission_classes=[AllowAny], authentication_classes=[])
     def departure_cities(self, request):
         """Get cities that can be departure points (not last stops) with trip counts"""
         from datetime import datetime
@@ -238,7 +240,7 @@ class CitiesView(viewsets.ModelViewSet):
         result = sorted(valid_departure_cities.values(), key=lambda x: x['city'])
         return Response(result, status=status.HTTP_200_OK)
     
-    @action(detail=False, methods=['get'], url_path='destination-cities')
+    @action(detail=False, methods=['get'], url_path='destination-cities', permission_classes=[AllowAny], authentication_classes=[])
     def destination_cities(self, request):
         """Get cities that have trips going to them from a specific city with trip counts"""
         from datetime import datetime

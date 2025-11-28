@@ -114,7 +114,7 @@ class Driver(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     profile= models.OneToOneField(Profile, on_delete=models.CASCADE)
     national_id = models.CharField(max_length=20, null=True, blank=True)
-    driver_rating = models.DecimalField(max_digits=5, decimal_places=2)
+    driver_rating = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, default=0.00)
     driver_license = models.CharField(max_length=16, null=True, blank=True)
     buses = models.ManyToManyField(Bus, related_name='drivers', blank=True)
     operator = models.ForeignKey(BusOperator, on_delete=models.CASCADE )
