@@ -22,6 +22,7 @@ def create_trip_from_cached_route(operator, bus, driver, cached_data, selected_r
     polyline_points = polyline_lib.decode(selected_route['overview_polyline']['points'])
     
     # Create Trip
+    route_name = selected_route.get('summary') or f"{cached_data['from_city']['name']} - {cached_data['to_city']['name']}"
     trip = Trip.objects.create(
         operator=operator,
         bus=bus,
@@ -30,7 +31,7 @@ def create_trip_from_cached_route(operator, bus, driver, cached_data, selected_r
         to_city_id=cached_data['to_city']['id'],
         journey_date=trip_data['journey_date'],
         planned_polyline=selected_route['overview_polyline']['points'],
-        planned_route_name=selected_route.get('summary', f"{cached_data['from_city']['name']} - {cached_data['to_city']['name']}"),
+        planned_route_name=route_name,
         trip_type=trip_data.get('trip_type', 'scheduled'),
         planned_departure=trip_data.get('planned_departure') or None,
         departure_window_start=trip_data.get('departure_window_start') or None,
