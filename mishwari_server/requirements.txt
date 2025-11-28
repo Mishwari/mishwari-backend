@@ -16,3 +16,5 @@ twilio==9.2.3
 polyline==2.0.2
 shapely==2.0.3
 django-unfold==0.71.0
+django-redis>=5.2.0
+redis>=4.0.0
