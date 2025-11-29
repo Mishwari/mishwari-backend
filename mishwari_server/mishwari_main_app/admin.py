@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django import forms
 from django.core.exceptions import ValidationError
-from .models import Driver,Trip,CityList,TripStop,Booking,Seat,Bus,BusOperator,Passenger,BookingPassenger,TemporaryMobileVerification,Profile,OperatorMetrics,UpgradeRequest
+from .models import Driver,Trip,CityList,TripStop,Booking,Seat,Bus,BusOperator,Passenger,TemporaryMobileVerification,Profile,OperatorMetrics,UpgradeRequest
 
 @admin.register(Driver)
 class DriverAdmin(admin.ModelAdmin):
@@ -74,14 +74,8 @@ class BusOperatorAdmin(admin.ModelAdmin):
 # admin.site.register(Passenger)
 @admin.register(Passenger)
 class PassengerAdmin(admin.ModelAdmin):
-    list_display = ['user', 'name', 'phone', 'email', 'age', 'gender']
-    search_fields = ['user__username', 'name', 'phone', 'email']
-
-# admin.site.register(BookingPassenger)
-@admin.register(BookingPassenger)
-class BookingPassengerAdmin(admin.ModelAdmin):
-    list_display = ['booking', 'passenger', 'seat', 'name', 'email', 'phone', 'age', 'gender']
-    search_fields = ['booking__id', 'passenger__full_name', 'seat__seat_number']
+    list_display = ['user', 'name', 'age', 'gender']
+    search_fields = ['user__username', 'name']
 
 # admin.site.register(TemporaryMobileVerification)
 @admin.register(TemporaryMobileVerification)

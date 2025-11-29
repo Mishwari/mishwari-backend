@@ -1,7 +1,7 @@
 import random
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Driver,Trip,TripStop,CityList,Seat,Booking,Bus,BusOperator,Passenger,BookingPassenger, TemporaryMobileVerification,Profile
+from .models import Driver,Trip,TripStop,CityList,Seat,Booking,Bus,BusOperator,Passenger, TemporaryMobileVerification,Profile
 
 
 class MobileVerificationSerializer(serializers.ModelSerializer):
@@ -28,7 +28,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
 
 class ProfileCompletionSerializer(serializers.ModelSerializer):
-    username = serializers.CharField(write_only=True, required=True)
+    username = serializers.CharField(write_only=True, required=False)  # Optional for driver-web
     email = serializers.EmailField(write_only=True, required=True)
     user = UserSerializer(read_only=True)
     # password = serializers.CharField(write_only=True, required=True)
@@ -37,8 +37,7 @@ class ProfileCompletionSerializer(serializers.ModelSerializer):
         model = Profile
         fields = ['user','username', 'full_name', 'birth_date', 'gender','address','email','role']
         extra_kwargs = {
-            'full_name':{'required': True}, 
-            'username':{'required': True},
+            'full_name':{'required': True},
         }
 
     def create(self, validated_data):
@@ -47,8 +46,13 @@ class ProfileCompletionSerializer(serializers.ModelSerializer):
         # password = validated_data.pop('password')
         mobile_number = self.context.get('mobile_number', None)
 
-        if not username : 
-            raise serializers.ValidationError({'message': 'Username is required for profile creation'})
+        # Auto-use mobile number as username if not provided (for passenger-web)
+        # Driver-web can still provide custom username
+        if not username:
+            username = mobile_number
+        
+        if not username:
+            raise serializers.ValidationError({'message': 'Mobile number is required for profile creation'})
         
         user = User.objects.create_user(username=username, email=email)
         
@@ -206,30 +210,19 @@ class BookingTripSerializer(serializers.ModelSerializer):
 class PassengerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Passenger
-        fields = ['id', 'name', 'email', 'phone','age','is_checked','gender']
-
-class BookingPassengerSerializer(serializers.ModelSerializer):
-    """Serializer for BookingPassenger with denormalized fields"""
-    seat_number = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = BookingPassenger
-        fields = ['id', 'name', 'email', 'phone', 'age', 'gender', 'seat_number']
-    
-    def get_seat_number(self, obj):
-        return obj.seat.seat_number if obj.seat else None
+        fields = ['id', 'name', 'age', 'is_checked', 'gender']
 
 class BookingSerializer2(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     trip = serializers.PrimaryKeyRelatedField(queryset=Trip.objects.all())
     from_stop = serializers.PrimaryKeyRelatedField(queryset=TripStop.objects.all())
     to_stop = serializers.PrimaryKeyRelatedField(queryset=TripStop.objects.all())
-    passengers = PassengerSerializer(many=True)
-    passenger_details = BookingPassengerSerializer(many=True, read_only=True)
+    passengers = serializers.ListField(child=serializers.DictField(), write_only=True)
+    passengers_data = serializers.ListField(child=serializers.DictField(), read_only=True)
 
     class Meta:
         model = Booking
-        fields = ['id', 'user', 'status', 'total_fare', 'trip', 'from_stop', 'to_stop', 'passengers', 'passenger_details', 'is_paid', 'payment_method', 'booking_time', 'booking_source', 'created_by']
+        fields = ['id', 'user', 'status', 'total_fare', 'trip', 'from_stop', 'to_stop', 'passengers', 'passengers_data', 'contact_name', 'contact_phone', 'contact_email', 'is_paid', 'payment_method', 'booking_time', 'booking_source', 'created_by']
 
     def validate(self, data):
         from .booking_utils import get_available_seats_for_journey
@@ -272,6 +265,11 @@ class BookingSerializer2(serializers.ModelSerializer):
         to_stop_id = validated_data['to_stop'].id
         payment_method = validated_data.get('payment_method', 'cash')
         
+        # Extract contact details
+        contact_name = validated_data.get('contact_name')
+        contact_phone = validated_data.get('contact_phone')
+        contact_email = validated_data.get('contact_email')
+        
         # Use atomic booking function
         booking = create_booking_atomic(
             trip_id=trip_id,
@@ -279,7 +277,10 @@ class BookingSerializer2(serializers.ModelSerializer):
             to_stop_id=to_stop_id,
             user=user,
             passengers_data=initial_passengers_data,
-            payment_method=payment_method
+            payment_method=payment_method,
+            contact_name=contact_name,
+            contact_phone=contact_phone,
+            contact_email=contact_email
         )
         
         return booking
@@ -295,8 +296,7 @@ class BookingSerializer2(serializers.ModelSerializer):
         representation['trip'] = TripsSerializer(instance.trip).data
         representation['from_stop'] = TripStopSerializer(instance.from_stop).data
         representation['to_stop'] = TripStopSerializer(instance.to_stop).data
-        # Use passenger_details (denormalized) instead of passengers (FK)
-        representation['passengers'] = BookingPassengerSerializer(instance.passenger_details.all(), many=True).data
+        representation['passengers'] = instance.passengers_data
         return representation
     
     # LOOP validate passenger by id to ignore passenger if it already there

@@ -3,7 +3,7 @@ Booking utilities with atomic operations and race condition protection
 """
 from django.db import transaction
 from django.utils import timezone
-from .models import Trip, TripStop, Booking, Passenger, BookingPassenger, Seat
+from .models import Trip, TripStop, Booking, Passenger, Seat
 
 
 class InsufficientSeatsError(Exception):
@@ -17,7 +17,7 @@ class BookingAlreadyCancelledError(Exception):
 
 
 @transaction.atomic
-def create_booking_atomic(trip_id, from_stop_id, to_stop_id, user, passengers_data, payment_method='cash'):
+def create_booking_atomic(trip_id, from_stop_id, to_stop_id, user, passengers_data, payment_method='cash', contact_name=None, contact_phone=None, contact_email=None):
     """
     Create booking with atomic seat reduction (prevents race conditions)
     
@@ -69,70 +69,42 @@ def create_booking_atomic(trip_id, from_stop_id, to_stop_id, user, passengers_da
     # Calculate fare based on checked passengers
     fare = (to_stop.price_from_start - from_stop.price_from_start) * len(checked_passengers)
     
-    # Create booking
-    booking = Booking.objects.create(
-        user=user,
-        trip=trip,
-        from_stop=from_stop,
-        to_stop=to_stop,
-        total_fare=fare,
-        status='confirmed',
-        payment_method=payment_method,
-        is_paid=False
-    )
-    
-    # Create passengers and assign seats
+    # Get available seats and assign to passengers
     available_seats = get_available_seats_for_segments(trip, segments, passenger_count)
     
-
-    
+    # Build passengers data with seat assignments
+    passengers_with_seats = []
     for i, passenger_data in enumerate(checked_passengers):
-        passenger_id = passenger_data.get('id')
-        
-        if passenger_id:
-            try:
-                passenger = Passenger.objects.get(id=passenger_id, user=user)
-            except Passenger.DoesNotExist:
-                passenger = Passenger.objects.filter(
-                    user=user,
-                    name=passenger_data.get('name'),
-                    phone=passenger_data.get('phone')
-                ).first()
-        else:
-            passenger = Passenger.objects.filter(
-                user=user,
-                name=passenger_data.get('name'),
-                phone=passenger_data.get('phone')
-            ).first()
-        
-        if not passenger:
-            passenger = Passenger.objects.create(
-                user=user,
-                name=passenger_data.get('name'),
-                age=passenger_data.get('age'),
-                gender=passenger_data.get('gender'),
-                phone=passenger_data.get('phone'),
-                email=passenger_data.get('email'),
-                is_checked=True
-            )
-        
         seat = available_seats[i] if i < len(available_seats) else None
         
-        BookingPassenger.objects.create(
-            booking=booking,
-            passenger=passenger,
-            seat=seat,
-            name=passenger_data.get('name'),
-            email=passenger_data.get('email'),
-            phone=passenger_data.get('phone'),
-            age=passenger_data.get('age'),
-            gender=passenger_data.get('gender')
-        )
+        passenger_snapshot = {
+            'name': passenger_data.get('name'),
+            'age': passenger_data.get('age'),
+            'gender': passenger_data.get('gender'),
+            'seat_number': seat.seat_number if seat else None
+        }
+        passengers_with_seats.append(passenger_snapshot)
         
         # Remove segments from seat availability
         if seat:
             seat.available_segments = [s for s in seat.available_segments if s not in segments]
             seat.save()
+    
+    # Create booking with passenger data
+    booking = Booking.objects.create(
+        user=user,
+        trip=trip,
+        from_stop=from_stop,
+        to_stop=to_stop,
+        passengers_data=passengers_with_seats,
+        contact_name=contact_name,
+        contact_phone=contact_phone,
+        contact_email=contact_email,
+        total_fare=fare,
+        status='confirmed',
+        payment_method=payment_method,
+        is_paid=False
+    )
     
     return booking
 
@@ -164,7 +136,7 @@ def cancel_booking_atomic(booking_id):
     segments = booking.get_crossed_segments()
     
     # Restore seats
-    passenger_count = booking.passengers.count()
+    passenger_count = len(booking.passengers_data)
     
     for seg in segments:
         trip.seat_matrix[seg] = trip.seat_matrix.get(seg, 0) + passenger_count
@@ -172,10 +144,13 @@ def cancel_booking_atomic(booking_id):
     trip.save()
     
     # Release seat assignments
-    for bp in booking.passenger_details.all():
-        if bp.seat:
-            bp.seat.available_segments.extend(segments)
-            bp.seat.save()
+    for passenger in booking.passengers_data:
+        seat_number = passenger.get('seat_number')
+        if seat_number:
+            seat = Seat.objects.filter(trip=trip, seat_number=seat_number).first()
+            if seat:
+                seat.available_segments.extend(segments)
+                seat.save()
     
     # Update booking status
     booking.status = 'cancelled'

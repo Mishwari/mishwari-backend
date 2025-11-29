@@ -210,6 +210,7 @@ class MobileLoginView(viewsets.ViewSet):
 
             try:
                 user = User.objects.get(profile__mobile_number=mobile_number)
+                print(f'[LOGIN] User found for mobile {mobile_number}: username={user.username}, id={user.id}')
                 tokens = self.get_tokens_for_user(user)
                 return Response({
                     "message": "Login successful.",
@@ -218,7 +219,7 @@ class MobileLoginView(viewsets.ViewSet):
                 }, status=status.HTTP_200_OK)
             
             except User.DoesNotExist:
-                print('does not exist')
+                print(f'[LOGIN] No user found for mobile {mobile_number}, returning partial status')
                 tokens = self.get_temporary_token_for_mobile(mobile_number)
                 return Response({
                     "message": "Mobile number verified, proceed to complete registration.",

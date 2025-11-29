@@ -7,7 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 
-from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, BookingPassenger, Seat, BusOperator, UpgradeRequest, CityList, Profile
+from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, Seat, BusOperator, UpgradeRequest, CityList, Profile
 from django.contrib.auth.models import User
 from .serializers import BusSerializer, TripsSerializer, BookingSerializer2, DriverSerializer
 from .permissions import IsVerifiedOperator, IsOperatorOrAdmin
@@ -394,6 +394,9 @@ class PhysicalBookingViewSet(viewsets.ModelViewSet):
             from_stop_id = request.data.get('from_stop')
             to_stop_id = request.data.get('to_stop')
             passengers_data = request.data.get('passengers', [])
+            contact_name = request.data.get('contact_name')
+            contact_phone = request.data.get('contact_phone')
+            contact_email = request.data.get('contact_email')
             
             # Create booking with physical source
             booking = create_booking_atomic(
@@ -402,7 +405,10 @@ class PhysicalBookingViewSet(viewsets.ModelViewSet):
                 to_stop_id=to_stop_id,
                 user=request.user,
                 passengers_data=passengers_data,
-                payment_method='cash'
+                payment_method='cash',
+                contact_name=contact_name,
+                contact_phone=contact_phone,
+                contact_email=contact_email
             )
             
             booking.booking_source = 'physical'

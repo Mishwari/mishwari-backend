@@ -287,8 +287,6 @@ genderChoices = [(
 class Passenger(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
-    email = models.EmailField(null=True, blank=True)
-    phone = models.CharField(max_length=15, null=True, blank=True)
     age = models.IntegerField(null=True, blank=True)
     is_checked = models.BooleanField(default=False)
     gender = models.CharField(max_length=10, null=True, blank=True, choices=genderChoices)
@@ -326,7 +324,14 @@ class Booking(models.Model):
     from_stop = models.ForeignKey(TripStop, on_delete=models.PROTECT, related_name='bookings_from', null=True, blank=True)
     to_stop = models.ForeignKey(TripStop, on_delete=models.PROTECT, related_name='bookings_to', null=True, blank=True)
     
-    passengers = models.ManyToManyField(Passenger, through='BookingPassenger')
+    # Store passenger snapshots with seat assignments
+    passengers_data = models.JSONField(default=list)
+    # Format: [{"name": "...", "age": ..., "gender": "...", "seat_number": "..."}]
+    
+    # Contact details for booking confirmation
+    contact_name = models.CharField(max_length=100, null=True, blank=True)
+    contact_phone = models.CharField(max_length=15, null=True, blank=True)
+    contact_email = models.EmailField(null=True, blank=True)
     
     total_fare = models.IntegerField(default=0)
     
@@ -355,40 +360,9 @@ class Booking(models.Model):
     
     def calculate_fare(self):
         """Calculate fare based on stop prices"""
-        passenger_count = self.passengers.count()
+        passenger_count = len(self.passengers_data)
         price_diff = self.to_stop.price_from_start - self.from_stop.price_from_start
         return price_diff * passenger_count
-    
-class BookingPassenger(models.Model):
-    """Links passengers to bookings with seat assignments"""
-    
-    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name='passenger_details')
-    passenger = models.ForeignKey(Passenger, on_delete=models.SET_NULL, null=True, blank=True)
-    seat = models.ForeignKey(Seat, on_delete=models.SET_NULL, null=True, blank=True)
-    
-    # Store passenger data to preserve it even if passenger is deleted
-    name = models.CharField(max_length=100, default='Unknown')
-    email = models.EmailField(null=True, blank=True)
-    phone = models.CharField(max_length=15, null=True, blank=True)
-    age = models.IntegerField(null=True, blank=True)
-    gender = models.CharField(max_length=10, null=True, blank=True, choices=genderChoices)
-    
-    class Meta:
-        unique_together = ['booking', 'seat']
-
-    def __str__(self):
-        return f"{self.name} - Seat {self.seat.seat_number if self.seat else 'N/A'}"
-    
-    def save(self, *args, **kwargs):
-        # Copy passenger data if passenger exists and name is default/empty
-        if self.passenger and (not self.name or self.name == 'Unknown'):
-            self.name = self.passenger.name
-            self.email = self.passenger.email
-            self.phone = self.passenger.phone
-            self.age = self.passenger.age
-            self.gender = self.passenger.gender
-        super().save(*args, **kwargs)
-    
 
 
 class OperatorMetrics(models.Model):
