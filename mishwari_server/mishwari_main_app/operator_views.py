@@ -548,11 +548,9 @@ class DriverManagementViewSet(viewsets.ModelViewSet):
         ).first()
         
         if existing:
-            invite_link = f'http://localhost:3001/join/{existing.invite_code}'
             print(f'[GENERATE INVITE] Existing invitation found: {existing.invite_code}')
             return Response({
                 'invite_code': existing.invite_code,
-                'invite_link': invite_link,
                 'expires_at': existing.expires_at
             })
         
@@ -570,13 +568,10 @@ class DriverManagementViewSet(viewsets.ModelViewSet):
             expires_at=expires_at
         )
         
-        invite_link = f'http://localhost:3001/join/{invite_code}'
-        
         print(f'[GENERATE INVITE] Success: {invite_code}')
         
         return Response({
             'invite_code': invite_code,
-            'invite_link': invite_link,
             'expires_at': expires_at,
             'mobile_number': mobile
         }, status=status.HTTP_201_CREATED)
