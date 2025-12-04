@@ -7,6 +7,7 @@ from .views import (
     TripsViewSet,DriverView,TripStopView,JwtUserView,
     DriverTripView,JwtDriverView,RouteViewSet,
     TripSearchView,CitiesView,BookingViewSet,BookingTripsViewSet,PassengersViewSet,
+    TripReviewViewSet,
     stripe_webhook
     )
 
@@ -41,6 +42,7 @@ router.register(r"city-list",CitiesView,basename="city-list")
 router.register(r"booking",BookingViewSet,basename="booking")
 router.register(r"seats",BookingTripsViewSet,basename="seats")
 router.register(r"passengers",PassengersViewSet, basename="user-passengers")
+router.register(r"reviews", TripReviewViewSet, basename="reviews")
 router.register(r"mobile-login",MobileLoginView, basename="mobile-login")
 router.register(r"profile",ProfileView,basename="profile")
 

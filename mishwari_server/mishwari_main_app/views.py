@@ -36,9 +36,10 @@ from .serializers import (BookingSerializer2, UserSerializer,DriverSerializer,Tr
                           TripStopSerializer,
                           CitiesSerializer,
                           BookingTripSerializer,
-                          PassengerSerializer
+                          PassengerSerializer,
+                          TripReviewSerializer
                           )
-from  .models import Driver, TripStop,Trip,CityList,Seat,Booking,Passenger,Bus
+from  .models import Driver, TripStop,Trip,CityList,Seat,Booking,Passenger,Bus,TripReview
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
@@ -181,6 +182,7 @@ class TripSearchView(viewsets.ViewSet):
                 'price': fare,
                 'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'amenities': trip.bus.amenities} if trip.bus else None,
                 'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
+                'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
                 'trip_type': trip.trip_type,
                 'status': trip.status,
                 'planned_route_name': trip.planned_route_name
@@ -586,11 +588,30 @@ class BookingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = BookingSerializer2
 
-    def get_queryset(self): 
-        print('Fetching bookings for user:', self.request.user, 'ID:', self.request.user.id)
-        bookings = Booking.objects.filter(user=self.request.user.id)
-        print(f'Found {bookings.count()} bookings')
-        return bookings
+    def get_queryset(self):
+        from .operator_utils import get_operator_for_user
+        
+        user = self.request.user
+        profile = user.profile
+        
+        # Passengers see only their bookings
+        if profile.role == 'passenger':
+            return Booking.objects.filter(user=user)
+        
+        # Drivers see bookings for their trips
+        elif profile.role == 'driver':
+            try:
+                driver = Driver.objects.get(user=user)
+                return Booking.objects.filter(trip__driver=driver) | Booking.objects.filter(trip__actual_driver=driver)
+            except Driver.DoesNotExist:
+                return Booking.objects.none()
+        
+        # Operator admins see all bookings for their trips
+        elif profile.role == 'operator_admin':
+            operator = get_operator_for_user(user)
+            return Booking.objects.filter(trip__operator=operator)
+        
+        return Booking.objects.none()
     
 
    
@@ -663,11 +684,33 @@ class BookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='cancel')
     def cancel_booking(self, request, pk=None):
         from .booking_utils import cancel_booking_atomic, BookingAlreadyCancelledError
+        from .operator_utils import get_operator_for_user
         
         booking = self.get_object()
+        user = request.user
+        profile = user.profile
         
-        # Validate ownership
-        if booking.user != request.user:
+        # Permission check: passenger, operator_admin, or assigned driver
+        has_permission = False
+        
+        # 1. Passenger who created the booking
+        if booking.user == user:
+            has_permission = True
+        # 2. Operator admin who owns the trip
+        elif profile.role == 'operator_admin':
+            operator = get_operator_for_user(user)
+            if booking.trip.operator == operator:
+                has_permission = True
+        # 3. Driver assigned to the trip
+        elif profile.role == 'driver':
+            try:
+                driver = Driver.objects.get(user=user)
+                if booking.trip.driver == driver:
+                    has_permission = True
+            except Driver.DoesNotExist:
+                pass
+        
+        if not has_permission:
             return Response(
                 {'error': 'You do not have permission to cancel this booking'},
                 status=status.HTTP_403_FORBIDDEN
@@ -675,9 +718,66 @@ class BookingViewSet(viewsets.ModelViewSet):
         
         try:
             cancel_booking_atomic(booking.id)
-            return Response({'message': 'Booking cancelled successfully.'}, status=status.HTTP_200_OK)
+            return Response({'message': 'Booking cancelled successfully'}, status=status.HTTP_200_OK)
         except BookingAlreadyCancelledError:
-            return Response({'error': 'Booking is already cancelled.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Booking already cancelled'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'], url_path='complete')
+    def complete_booking(self, request, pk=None):
+        """Mark booking as completed (driver/operator only)"""
+        booking = self.get_object()
+        
+        # Permission check
+        profile = request.user.profile
+        if profile.role not in ['driver', 'operator_admin']:
+            return Response({'error': 'Only drivers/operators can complete bookings'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        # Verify ownership
+        if profile.role == 'driver':
+            driver = Driver.objects.get(user=request.user)
+            if booking.trip.driver != driver:
+                return Response({'error': 'Not your trip'}, 
+                              status=status.HTTP_403_FORBIDDEN)
+        
+        booking.status = 'completed'
+        booking.save()
+        
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post'], url_path='confirm')
+    def confirm_booking(self, request, pk=None):
+        """Confirm pending booking (driver/operator only)"""
+        from .operator_utils import get_operator_for_user
+        
+        booking = self.get_object()
+        
+        profile = request.user.profile
+        if profile.role not in ['driver', 'operator_admin']:
+            return Response({'error': 'Only drivers/operators can confirm bookings'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        if profile.role == 'driver':
+            driver = Driver.objects.get(user=request.user)
+            if booking.trip.driver != driver and booking.trip.actual_driver != driver:
+                return Response({'error': 'Not your trip'}, 
+                              status=status.HTTP_403_FORBIDDEN)
+        elif profile.role == 'operator_admin':
+            operator = get_operator_for_user(request.user)
+            if booking.trip.operator != operator:
+                return Response({'error': 'Not your trip'}, 
+                              status=status.HTTP_403_FORBIDDEN)
+        
+        if booking.status != 'pending':
+            return Response({'error': 'Only pending bookings can be confirmed'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        booking.status = 'confirmed'
+        booking.save()
+        
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
 @csrf_exempt
 def stripe_webhook(request):
@@ -798,3 +898,52 @@ class PassengersViewSet(viewsets.ModelViewSet):
                     pass
         
         return Response({'message': 'Passengers updated successfully'}, status=status.HTTP_200_OK)
+
+
+class TripReviewViewSet(viewsets.ModelViewSet):
+    """Trip review management"""
+    serializer_class = TripReviewSerializer
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+    
+    def get_queryset(self):
+        return TripReview.objects.filter(booking__user=self.request.user)
+    
+    def create(self, request):
+        """Create review with resource snapshots"""
+        booking_id = request.data.get('booking')
+        
+        try:
+            booking = Booking.objects.get(id=booking_id, user=request.user)
+        except Booking.DoesNotExist:
+            return Response({'error': 'Booking not found'}, 
+                          status=status.HTTP_404_NOT_FOUND)
+        
+        # Validate booking is completed
+        if booking.status != 'completed':
+            return Response({'error': 'Can only review completed trips'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if already reviewed
+        if hasattr(booking, 'review'):
+            return Response({'error': 'Booking already reviewed'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get actual resources from trip
+        trip = booking.trip
+        resources = trip.get_resources()
+        
+        # Create review with snapshots
+        review = TripReview.objects.create(
+            booking=booking,
+            bus_snapshot=resources['bus'],
+            driver_snapshot=resources['driver'],
+            operator_snapshot=trip.operator,
+            overall_rating=request.data['overall_rating'],
+            bus_condition_rating=request.data['bus_condition_rating'],
+            driver_rating=request.data['driver_rating'],
+            comment=request.data.get('comment', '')
+        )
+        
+        serializer = self.get_serializer(review)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

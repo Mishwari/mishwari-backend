@@ -1,13 +1,7 @@
 import random
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Driver,Trip,TripStop,CityList,Seat,Booking,Bus,BusOperator,Passenger, TemporaryMobileVerification,Profile
-
-
-class MobileVerificationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TemporaryMobileVerification
-        fields = ["mobile_number", "otp_code", "is_verified"]
+from .models import Driver,Trip,TripStop,CityList,Seat,Booking,Bus,BusOperator,Passenger,Profile,TripReview
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -91,12 +85,13 @@ class ProfileCompletionSerializer(serializers.ModelSerializer):
 class BusOperatorSerializer(serializers.ModelSerializer):
     class Meta:
         model = BusOperator
-        fields = ["id", "name"]
+        fields = ["id", "name", "avg_rating", "total_reviews"]
 
 class BusSerializer(serializers.ModelSerializer):
     class Meta:
         model = Bus
-        fields = ["id", "bus_number","bus_type", "capacity","amenities","is_verified","verification_documents"]
+        fields = ["id", "bus_number","bus_type", "capacity","amenities","is_verified","verification_documents",
+                  "avg_rating", "total_reviews", "has_wifi", "has_ac", "has_usb_charging"]
 
 class DriverSerializer(serializers.ModelSerializer):
     operator = BusOperatorSerializer(read_only=True)
@@ -108,7 +103,7 @@ class DriverSerializer(serializers.ModelSerializer):
     class Meta:
         model = Driver 
         fields = ['id', 'driver_name', 'mobile_number', 'email', 'national_id', 'driver_license', 
-                  'driver_rating', 'operator', 'buses', 'is_verified', 'verification_documents']
+                  'driver_rating', 'total_reviews', 'operator', 'buses', 'is_verified', 'verification_documents']
 
 class CitiesSerializer(serializers.ModelSerializer):
     class Meta:
@@ -117,8 +112,9 @@ class CitiesSerializer(serializers.ModelSerializer):
 
 
 class TripsSerializer(serializers.ModelSerializer):
-    driver = DriverSerializer(read_only=True)
-    bus = BusSerializer(read_only=True)
+    driver = serializers.SerializerMethodField()
+    bus = serializers.SerializerMethodField()
+    operator = BusOperatorSerializer(read_only=True)
     from_city = CitiesSerializer(read_only=True)
     to_city = CitiesSerializer(read_only=True)
     stops = serializers.SerializerMethodField()
@@ -132,10 +128,20 @@ class TripsSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Trip
-        fields = ['id','driver','planned_route_name','bus','from_city','to_city','journey_date',
+        fields = ['id','driver','planned_route_name','bus','operator','from_city','to_city','journey_date',
                   'departure_time','arrival_time','available_seats','price','status',
                   'trip_type','planned_departure','departure_window_start','departure_window_end','actual_departure',
                   'can_publish','stops','seat_matrix']
+    
+    def get_bus(self, obj):
+        """Return actual bus if set, otherwise planned bus"""
+        resources = obj.get_resources()
+        return BusSerializer(resources['bus']).data if resources['bus'] else None
+    
+    def get_driver(self, obj):
+        """Return actual driver if set, otherwise planned driver"""
+        resources = obj.get_resources()
+        return DriverSerializer(resources['driver']).data if resources['driver'] else None
     
     def get_departure_time(self, obj):
         """Ge`t departure time from first stop"""
@@ -212,6 +218,22 @@ class PassengerSerializer(serializers.ModelSerializer):
         model = Passenger
         fields = ['id', 'name', 'age', 'is_checked', 'gender']
 
+class TripReviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripReview
+        fields = ['id', 'booking', 'overall_rating', 'bus_condition_rating', 
+                  'driver_rating', 'comment', 'created_at']
+        read_only_fields = ['created_at']
+    
+    def validate_booking(self, value):
+        """Ensure booking is completed and not already reviewed"""
+        if value.status != 'completed':
+            raise serializers.ValidationError("Can only review completed trips")
+        if hasattr(value, 'review'):
+            raise serializers.ValidationError("Booking already reviewed")
+        return value
+
+
 class BookingSerializer2(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     trip = serializers.PrimaryKeyRelatedField(queryset=Trip.objects.all())
@@ -219,10 +241,11 @@ class BookingSerializer2(serializers.ModelSerializer):
     to_stop = serializers.PrimaryKeyRelatedField(queryset=TripStop.objects.all())
     passengers = serializers.ListField(child=serializers.DictField(), write_only=True)
     passengers_data = serializers.ListField(child=serializers.DictField(), read_only=True)
+    review = TripReviewSerializer(read_only=True)
 
     class Meta:
         model = Booking
-        fields = ['id', 'user', 'status', 'total_fare', 'trip', 'from_stop', 'to_stop', 'passengers', 'passengers_data', 'contact_name', 'contact_phone', 'contact_email', 'is_paid', 'payment_method', 'booking_time', 'booking_source', 'created_by']
+        fields = ['id', 'user', 'status', 'total_fare', 'trip', 'from_stop', 'to_stop', 'passengers', 'passengers_data', 'contact_name', 'contact_phone', 'contact_email', 'is_paid', 'payment_method', 'booking_time', 'booking_source', 'created_by', 'review']
 
     def validate(self, data):
         from .booking_utils import get_available_seats_for_journey

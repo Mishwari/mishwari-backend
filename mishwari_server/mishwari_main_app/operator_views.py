@@ -6,11 +6,12 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from datetime import timedelta
 
-from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, Seat, BusOperator, UpgradeRequest, CityList, Profile
+from .models import Bus, Trip, Booking, Driver, TripStop, Passenger, Seat, BusOperator, UpgradeRequest, CityList, Profile, DriverInvitation
 from django.contrib.auth.models import User
 from .serializers import BusSerializer, TripsSerializer, BookingSerializer2, DriverSerializer
-from .permissions import IsVerifiedOperator, IsOperatorOrAdmin
+from .permissions import IsVerifiedOperator, IsOperatorOrAdmin, require_transaction_auth
 from .booking_utils import create_booking_atomic
 from .notifications import send_departure_notification
 from .route_utils import (
@@ -31,7 +32,23 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOperatorOrAdmin]
     authentication_classes = [JWTAuthentication]
     
+    def list(self, request, *args, **kwargs):
+        """List buses - read-only for invited drivers"""
+        return super().list(request, *args, **kwargs)
+    
+    def retrieve(self, request, *args, **kwargs):
+        """Get bus details - read-only for invited drivers"""
+        return super().retrieve(request, *args, **kwargs)
+    
+    @require_transaction_auth
+    def destroy(self, request, *args, **kwargs):
+        """Delete bus - requires step-up auth"""
+        return super().destroy(request, *args, **kwargs)
+    
     def create(self, request, *args, **kwargs):
+        """Create bus - operator_admin only"""
+        if request.user.profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can create buses'}, status=status.HTTP_403_FORBIDDEN)
         """Create bus with role-based validation"""
         profile = request.user.profile
         operator = get_operator_for_user(request.user)
@@ -55,13 +72,15 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
         serializer.save(operator=operator)
     
     def update(self, request, *args, **kwargs):
-        """Override update to uncheck is_verified when bus_number or bus_type changes"""
+        """Update bus - operator_admin only"""
+        if request.user.profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can update buses'}, status=status.HTTP_403_FORBIDDEN)
+        
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         
-        # Uncheck is_verified only if bus_number or bus_type changed
         if ('bus_number' in serializer.validated_data and serializer.validated_data['bus_number'] != instance.bus_number) or \
            ('bus_type' in serializer.validated_data and serializer.validated_data['bus_type'] != instance.bus_type):
             serializer.validated_data['is_verified'] = False
@@ -70,7 +89,9 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     def partial_update(self, request, *args, **kwargs):
-        """Override partial_update to uncheck is_verified when bus_number or bus_type changes"""
+        """Partial update bus - operator_admin only"""
+        if request.user.profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can update buses'}, status=status.HTTP_403_FORBIDDEN)
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
     
@@ -101,9 +122,18 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOperatorOrAdmin]
     authentication_classes = [JWTAuthentication]
     
+    @require_transaction_auth
+    def destroy(self, request, *args, **kwargs):
+        """Delete trip - requires step-up auth"""
+        return super().destroy(request, *args, **kwargs)
+    
     def get_queryset(self):
         operator = get_operator_for_user(self.request.user)
         queryset = Trip.objects.filter(operator=operator)
+        
+        # Invited drivers only see trips assigned to them
+        if self.request.user.profile.role == 'driver':
+            queryset = queryset.filter(driver__user=self.request.user)
         
         # Filter by status if provided
         status_filter = self.request.query_params.get('status')
@@ -113,7 +143,10 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
         return queryset
     
     def create(self, request, *args, **kwargs):
-        """Create trip with role-based validation"""
+        """Create trip - operator_admin only"""
+        if request.user.profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can create trips'}, status=status.HTTP_403_FORBIDDEN)
+        
         profile = request.user.profile
         operator = get_operator_for_user(request.user)
         
@@ -165,25 +198,23 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def depart_now(self, request, pk=None):
-        """Trigger departure for flexible trips"""
+        """Trigger departure - activate published trips"""
         trip = self.get_object()
         
-        if trip.trip_type != 'flexible':
-            return Response({'error': 'Only flexible trips can use depart now'}, status=status.HTTP_400_BAD_REQUEST)
+        if trip.status != 'published':
+            return Response({'error': 'Only published trips can be activated'}, status=status.HTTP_400_BAD_REQUEST)
         
-        if trip.departure_window_start and timezone.now() < trip.departure_window_start:
+        if trip.trip_type == 'flexible' and trip.departure_window_start and timezone.now() < trip.departure_window_start:
             return Response({'error': 'Cannot depart before window start'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Update actual departure time
         trip.actual_departure = timezone.now()
         trip.status = 'active'
         trip.save()
         
-        # Send notifications
         notification_count = send_departure_notification(trip.id)
         
         return Response({
-            'message': f'Departure notification sent to {notification_count} passengers',
+            'message': f'Trip activated. Notification sent to {notification_count} passengers',
             'actual_departure': trip.actual_departure
         })
     
@@ -301,6 +332,59 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
         bookings = Booking.objects.filter(trip=trip).order_by('-booking_time')
         serializer = BookingSerializer2(bookings, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path='set-actual-resources')
+    def set_actual_resources(self, request, pk=None):
+        """Set actual bus/driver if different from planned"""
+        trip = self.get_object()
+        
+        if request.user.profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can swap resources'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        operator = get_operator_for_user(request.user)
+        actual_bus_id = request.data.get('actual_bus')
+        actual_driver_id = request.data.get('actual_driver')
+        
+        try:
+            if actual_bus_id:
+                trip.actual_bus = Bus.objects.get(id=actual_bus_id, operator=operator)
+            if actual_driver_id:
+                trip.actual_driver = Driver.objects.get(id=actual_driver_id, operator=operator)
+            
+            trip.save()
+            
+            return Response({'message': 'Actual resources updated'})
+        except (Bus.DoesNotExist, Driver.DoesNotExist):
+            return Response({'error': 'Resource not found or not owned by operator'}, 
+                          status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=True, methods=['post'], url_path='complete')
+    def complete_trip(self, request, pk=None):
+        """Mark trip as completed and complete all its bookings"""
+        trip = self.get_object()
+        
+        # Permission check: operator_admin or assigned driver
+        profile = request.user.profile
+        if profile.role == 'driver':
+            driver = Driver.objects.get(user=request.user)
+            if trip.driver != driver and trip.actual_driver != driver:
+                return Response({'error': 'Not your trip'}, status=status.HTTP_403_FORBIDDEN)
+        elif profile.role != 'operator_admin':
+            return Response({'error': 'Only drivers/operators can complete trips'}, status=status.HTTP_403_FORBIDDEN)
+        
+        if trip.status not in ['active', 'published']:
+            return Response({'error': f'Cannot complete trip with status "{trip.status}"'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        with transaction.atomic():
+            trip.status = 'completed'
+            trip.completed_at = timezone.now()
+            trip.save()
+            
+            bookings = Booking.objects.filter(trip=trip).exclude(status__in=['cancelled', 'completed'])
+            completed_count = bookings.update(status='completed')
+        
+        return Response({'message': 'Trip completed successfully', 'bookings_completed': completed_count}, status=status.HTTP_200_OK)
     
     @action(detail=False, methods=['post'], url_path='create-with-stops')
     def create_with_stops(self, request):
@@ -431,69 +515,100 @@ class DriverManagementViewSet(viewsets.ModelViewSet):
         return Driver.objects.filter(operator=operator)
     
     def create(self, request):
-        """Create driver account (operator_admin only)"""
-        if request.user.profile.role != 'operator_admin':
-            return Response({'error': 'Only operator_admin can add drivers'}, status=status.HTTP_403_FORBIDDEN)
-        
-        mobile_number = request.data.get('mobile_number')
-        full_name = request.data.get('full_name')
-        national_id = request.data.get('national_id', '')
-        driver_license = request.data.get('driver_license', '')
-        email = request.data.get('email', '')
-        
-        if not mobile_number or not full_name:
-            return Response({'error': 'mobile_number and full_name are required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check if mobile number already exists
-        if Profile.objects.filter(mobile_number=mobile_number).exists():
-            return Response({'error': 'Mobile number already registered'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            with transaction.atomic():
-                # Create User
-                username = f"driver_{mobile_number}"
-                user = User.objects.create_user(username=username, email=email or '')
-                
-                # Create Profile
-                profile = Profile.objects.create(
-                    user=user,
-                    mobile_number=mobile_number,
-                    full_name=full_name,
-                    role='driver'
-                )
-                
-                # Create Driver
-                operator = get_operator_for_user(request.user)
-                driver = Driver.objects.create(
-                    user=user,
-                    profile=profile,
-                    national_id=national_id,
-                    driver_license=driver_license,
-                    driver_rating=0.0,
-                    operator=operator
-                )
-                
-                serializer = self.get_serializer(driver)
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        """Direct driver creation disabled - use invitation system"""
+        return Response({
+            'error': 'Direct driver creation is disabled',
+            'message': 'Please use the invitation system to add drivers',
+            'action': 'Use generate-invite endpoint'
+        }, status=status.HTTP_403_FORBIDDEN)
     
-    @action(detail=False, methods=['post'])
-    def invite(self, request):
-        """Invite driver by phone number (operator_admin only) - Manual process for now"""
+    @action(detail=False, methods=['post'], url_path='generate-invite')
+    def generate_invite(self, request):
+        """Generate invitation code for driver (operator_admin only)"""
         if request.user.profile.role != 'operator_admin':
             return Response({'error': 'Only operator_admin can invite drivers'}, status=status.HTTP_403_FORBIDDEN)
         
-        phone = request.data.get('phone')
-        if not phone:
-            return Response({'error': 'Phone number required'}, status=status.HTTP_400_BAD_REQUEST)
+        mobile = request.data.get('mobile_number')
+        print(f'[GENERATE INVITE] Mobile: {mobile}')
         
-        # TODO: Implement SMS invitation system
-        # For now, operators should add drivers manually
+        if not mobile:
+            return Response({'error': 'mobile_number required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if Profile.objects.filter(mobile_number=mobile).exists():
+            return Response({'error': 'Mobile number already registered'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        operator = get_operator_for_user(request.user)
+        print(f'[GENERATE INVITE] Operator: {operator.id}')
+        
+        existing = DriverInvitation.objects.filter(
+            operator=operator,
+            mobile_number=mobile,
+            status='pending',
+            expires_at__gt=timezone.now()
+        ).first()
+        
+        if existing:
+            invite_link = f'http://localhost:3001/join/{existing.invite_code}'
+            print(f'[GENERATE INVITE] Existing invitation found: {existing.invite_code}')
+            return Response({
+                'invite_code': existing.invite_code,
+                'invite_link': invite_link,
+                'expires_at': existing.expires_at
+            })
+        
+        from django.utils.crypto import get_random_string
+        invite_code = get_random_string(8, 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789')
+        expires_at = timezone.now() + timedelta(days=7)
+        
+        print(f'[GENERATE INVITE] Creating new invitation: {invite_code}')
+        
+        invitation = DriverInvitation.objects.create(
+            operator=operator,
+            mobile_number=mobile,
+            invite_code=invite_code,
+            created_by=request.user,
+            expires_at=expires_at
+        )
+        
+        invite_link = f'http://localhost:3001/join/{invite_code}'
+        
+        print(f'[GENERATE INVITE] Success: {invite_code}')
+        
         return Response({
-            'message': 'Driver invitation feature coming soon. Please add drivers manually for now.',
-            'phone': phone
-        }, status=status.HTTP_200_OK)
+            'invite_code': invite_code,
+            'invite_link': invite_link,
+            'expires_at': expires_at,
+            'mobile_number': mobile
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=False, methods=['get'], url_path='invitations')
+    def list_invitations(self, request):
+        """List all invitations sent by operator"""
+        operator = get_operator_for_user(request.user)
+        invitations = DriverInvitation.objects.filter(operator=operator)
+        
+        return Response([{
+            'id': inv.id,
+            'mobile_number': inv.mobile_number,
+            'invite_code': inv.invite_code,
+            'status': inv.status,
+            'created_at': inv.created_at,
+            'expires_at': inv.expires_at,
+            'accepted_at': inv.accepted_at
+        } for inv in invitations])
+    
+    @action(detail=True, methods=['post'], url_path='cancel-invite')
+    def cancel_invitation(self, request, pk=None):
+        """Cancel pending invitation"""
+        operator = get_operator_for_user(request.user)
+        
+        try:
+            invitation = DriverInvitation.objects.get(id=pk, operator=operator, status='pending')
+            invitation.status = 'cancelled'
+            invitation.save()
+            return Response({'message': 'Invitation cancelled'})
+        except DriverInvitation.DoesNotExist:
+            return Response({'error': 'Invitation not found'}, status=status.HTTP_404_NOT_FOUND)
     
     @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):

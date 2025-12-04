@@ -1,4 +1,31 @@
 from rest_framework.permissions import BasePermission
+from rest_framework.response import Response
+from django.core.cache import cache
+from functools import wraps
+
+def require_transaction_auth(view_func):
+    """Decorator for sensitive operations requiring step-up auth"""
+    @wraps(view_func)
+    def wrapper(self, request, *args, **kwargs):
+        from rest_framework import status as http_status
+        
+        transaction_token = request.headers.get('X-Transaction-Token')
+        
+        if not transaction_token:
+            return Response({
+                'error': 'REQUIRE_AUTH',
+                'message': 'This action requires additional authentication'
+            }, status=http_status.HTTP_403_FORBIDDEN)
+        
+        cached_token = cache.get(f'transaction_{request.user.id}')
+        if transaction_token != cached_token:
+            return Response({'error': 'Invalid or expired transaction token'}, status=http_status.HTTP_403_FORBIDDEN)
+        
+        # Consume token (one-time use)
+        cache.delete(f'transaction_{request.user.id}')
+        
+        return view_func(self, request, *args, **kwargs)
+    return wrapper
 
 class IsPassenger(BasePermission):
     def has_permission(self, request, view):

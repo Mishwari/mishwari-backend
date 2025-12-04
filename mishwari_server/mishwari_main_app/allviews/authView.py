@@ -25,7 +25,8 @@ from django.views import View
 from rest_framework.decorators import action
 from django.core.cache import cache
 
-from ..models import Profile, TemporaryMobileVerification, BusOperator, Driver
+from ..models import Profile, BusOperator, Driver, OTPAttempt, DriverInvitation
+from datetime import timedelta
 from twilio.rest import Client 
 
 
@@ -41,32 +42,53 @@ class MobileLoginView(viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='request-otp')
     def request_otp(self, request):
         mobile_number = request.data.get('mobile_number')
-
-        if not self.is_phone_blocked(mobile_number):
-            return Response({'error': 'Phone number is blocked'}, status=status.HTTP_403_FORBIDDEN)
-
-        if not self.can_request_otp(mobile_number):
-            return Response({'error': 'Too many requests, Try again later'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        
+        # Check rate limiting with OTPAttempt
+        attempt, _ = OTPAttempt.objects.get_or_create(mobile_number=mobile_number)
+        if attempt.blocked_until and timezone.now() < attempt.blocked_until:
+            return Response({'error': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        
+        if attempt.attempt_count >= 3:
+            attempt.blocked_until = timezone.now() + timedelta(minutes=30)
+            attempt.save()
+            return Response({'error': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         
         otp_code = get_random_string(length=4, allowed_chars='0123456789')
-
-        verification, created = TemporaryMobileVerification.objects.update_or_create(
-            mobile_number=mobile_number,
-            defaults={
-                'otp_code': otp_code,
-                'is_verified': False,
-                'otp_sent_at': timezone.now() # NECESSARY
-            }
-        )
-
+        
+        # Store OTP in cache (1 min expiry)
+        cache.set(f'otp_{mobile_number}', otp_code, timeout=60)
+        
+        attempt.attempt_count += 1
+        attempt.save()
+        
         print(f'sending otp {otp_code} to mobile {mobile_number}')
+        
+        # Check if user has password (only operator_admin should have password)
+        requires_password = False
+        try:
+            user = User.objects.get(username=mobile_number)
+            profile = Profile.objects.get(user=user)
+            has_password = user.has_usable_password()
+            print(f'[OTP REQUEST] User {mobile_number} - role: {profile.role}, has_usable_password: {has_password}')
+            # Only require password for operator_admin with usable password
+            if profile.role == 'operator_admin' and has_password:
+                requires_password = True
+        except (User.DoesNotExist, Profile.DoesNotExist):
+            print(f'[OTP REQUEST] User {mobile_number} - does not exist')
+            pass
         
         result = self.send_otp_via_infobip(mobile_number, otp_code)
         if result['status'] == 'success':
-            return Response({'message': 'OTP sent successfully via SMS'}, status=status.HTTP_200_OK)
+            return Response({
+                'message': 'OTP sent successfully via SMS',
+                'requires_password': requires_password
+            }, status=status.HTTP_200_OK)
         else:
-            print(f"Twilio error: {result['message']}")
-            return Response({'message': f"OTP: {otp_code} (SMS failed: {result['message']})"}, status=status.HTTP_200_OK)
+            print(f"SMS error: {result['message']}")
+            return Response({
+                'message': f"OTP: {otp_code} (SMS failed: {result['message']})",
+                'requires_password': requires_password
+            }, status=status.HTTP_200_OK)
         
 
     def send_otp_via_twilio(self, phone_number, otp_code):
@@ -190,142 +212,268 @@ class MobileLoginView(viewsets.ViewSet):
     def verify_otp(self, request):
         mobile_number = request.data.get('mobile_number')
         otp_code = request.data.get('otp_code')
+        password = request.data.get('password')  # Optional password for operator_admin
+        
+        # Get OTP from cache
+        cached_otp = cache.get(f'otp_{mobile_number}')
+        if not cached_otp:
+            return Response({'error': 'OTP expired or not found'}, status=status.HTTP_404_NOT_FOUND)
         
         emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
-        print("emeregency code:", emergency_code)
         
-        try:
-            verification = TemporaryMobileVerification.objects.get(mobile_number=mobile_number)
- 
-            print('Verification', verification.otp_is_valid())
-        except TemporaryMobileVerification.DoesNotExist:
-            return Response({'error': 'Mobile number not found'}, status=status.HTTP_404_NOT_FOUND)
-        
-
-        if otp_code == emergency_code or (verification.otp_code == otp_code and verification.otp_is_valid()): # otp validity 10 min from models
-            print('received otp ',otp_code)
-            verification.is_verified = True
-            verification.attempts = 0 
-            verification.save()
-
+        if otp_code == emergency_code or otp_code == cached_otp:
+            # Create user with phone as username
+            user, created = User.objects.get_or_create(
+                username=mobile_number,
+                defaults={'email': f'{mobile_number}@temp.mishwari.com'}
+            )
+            
+            # Create empty profile (full_name is None)
+            profile, _ = Profile.objects.get_or_create(
+                user=user,
+                defaults={
+                    'mobile_number': mobile_number,
+                    'role': 'passenger'
+                }
+            )
+            
+            # Check if user has password (only operator_admin should require password)
+            has_password = user.has_usable_password()
+            print(f'[VERIFY OTP] User {mobile_number} - created: {created}, role: {profile.role}, has_usable_password: {has_password}')
+            if not created and profile.role == 'operator_admin' and has_password:
+                if not password:
+                    return Response({'error': 'Password required'}, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Verify password
+                if not user.check_password(password):
+                    return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
+            
+            # All validations passed - clear OTP and reset attempts
+            cache.delete(f'otp_{mobile_number}')
             try:
-                user = User.objects.get(profile__mobile_number=mobile_number)
-                print(f'[LOGIN] User found for mobile {mobile_number}: username={user.username}, id={user.id}')
-                tokens = self.get_tokens_for_user(user)
-                return Response({
-                    "message": "Login successful.",
-                    "user_status": "complete",
-                    "tokens": tokens
-                }, status=status.HTTP_200_OK)
+                attempt = OTPAttempt.objects.get(mobile_number=mobile_number)
+                attempt.attempt_count = 0
+                attempt.blocked_until = None
+                attempt.save()
+            except OTPAttempt.DoesNotExist:
+                pass
             
-            except User.DoesNotExist:
-                print(f'[LOGIN] No user found for mobile {mobile_number}, returning partial status')
-                tokens = self.get_temporary_token_for_mobile(mobile_number)
-                return Response({
-                    "message": "Mobile number verified, proceed to complete registration.",
-                    "user_status": "partial",
-                    "tokens": tokens
-                }, status=status.HTTP_200_OK)
-            
-        return Response({"error": "Invalid or expired OTP."}, status=status.HTTP_400_BAD_REQUEST)                                                       
+            tokens = self.get_tokens_for_user(user)
+            return Response({
+                "message": "Login successful",
+                "tokens": tokens
+            }, status=status.HTTP_200_OK)
+        
+        return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)                                                       
     
 
+    @action(detail=False, methods=['post'], url_path='verify-transaction', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
+    def verify_transaction(self, request):
+        """Verify password for sensitive operations (operator_admin only)"""
+        credential = request.data.get('credential')
+        profile = request.user.profile
+        
+        if profile.role != 'operator_admin':
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        if not request.user.check_password(credential):
+            return Response({'error': 'Invalid password'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Generate short-lived transaction token (5 minutes)
+        transaction_token = get_random_string(32)
+        cache.set(f'transaction_{request.user.id}', transaction_token, timeout=300)
+        
+        return Response({'transaction_token': transaction_token}, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['post'], url_path='change-mobile', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
+    def change_mobile(self, request):
+        """Change mobile number with OTP verification"""
+        new_mobile = request.data.get('new_mobile')
+        otp_code = request.data.get('otp_code')
+        password = request.data.get('password')
+        
+        profile = request.user.profile
+        
+        # Verify password for operator_admin
+        if profile.role == 'operator_admin':
+            if not password or not request.user.check_password(password):
+                return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # Verify OTP
+        cached_otp = cache.get(f'otp_{new_mobile}')
+        emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
+        
+        if not (otp_code == emergency_code or otp_code == cached_otp):
+            return Response({'error': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if new mobile already exists
+        if User.objects.filter(username=new_mobile).exclude(id=request.user.id).exists():
+            return Response({'error': 'Mobile number already in use'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update mobile number
+        old_mobile = profile.mobile_number
+        request.user.username = new_mobile
+        request.user.save()
+        profile.mobile_number = new_mobile
+        profile.save()
+        
+        # Clear OTP
+        cache.delete(f'otp_{new_mobile}')
+        
+        print(f'[MOBILE CHANGE] User {request.user.id} changed mobile from {old_mobile} to {new_mobile}')
+        
+        return Response({'message': 'Mobile number updated successfully'}, status=status.HTTP_200_OK)
+    
     @action(detail = False, methods = ['GET'], url_path='profile')
     def profile_detail(self,request):
         user = User.objects.get(user=request.user)
     
-    @action(detail=False, methods=['post'], url_path='complete-profile')
-    def complete_profile(self, request):
-        # token_mobile_number = request.user.token.get('mobile_number') # did not work since token has to be linked with user id 
-
-        # self.authentication_classes = []
-
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return Response({"error": "No token provided"}, status=status.HTTP_401_UNAUTHORIZED)
+    @action(detail=False, methods=['get'], url_path='validate-invite')
+    def validate_invite(self, request):
+        """Validate invitation code (before OTP)"""
+        invite_code = request.query_params.get('code')
         
-        token_str = auth_header.split(' ')[1]
-
-        try: 
-            token = UntypedToken(token_str)
-            token_mobile_number = token.get('mobile_number', None) # case 1: if mobile based token
-            user_id = token.get('user_id', None) # case 2: if user based token
-
-            # if not token_mobile_number:
-            #     return Response({"error": "Invalid token. No mobile number found"}, status=status.HTTP_401_UNAUTHORIZED)
-
-            # if only mobile verified without
-            if token_mobile_number:
-
-
-                if 'mobile_number' in request.data:
-                    return Response({"error" : "Mobile number can not be changed during profile completing after verification."}, status=status.HTTP_400_BAD_REQUEST)
-                
-                serializer = ProfileCompletionSerializer(data=request.data, context={'mobile_number': token_mobile_number}) # NOTE trigger create since no instance provided 
-                if serializer.is_valid():
-                    profile = serializer.save()
-                    user = profile.user
-                    
-                    # Handle operator registration
-                    role = request.data.get('role', 'passenger')
-                    print(f'[REGISTRATION] Creating operator for role: {role}')
-                    if role in ['driver', 'operator_admin']:
-                        # Auto-create operator with platform_user link
-                        operator = BusOperator.objects.create(
-                            name=profile.full_name or user.username,
-                            contact_info=profile.mobile_number,
-                            uses_own_system=False,
-                            platform_user=user  # Direct link to platform user
-                        )
-                        print(f'[REGISTRATION] Created BusOperator ID: {operator.id}, platform_user: {user.username}')
-                        
-                        # For individual drivers, also create Driver record
-                        if role == 'driver':
-                            driver = Driver.objects.create(
-                                user=user,
-                                profile=profile,
-                                driver_rating=5.0,
-                                operator=operator
-                            )
-                            print(f'[REGISTRATION] Created Driver ID: {driver.id} for user: {user.username}')
-                    
-                    tokens = self.get_tokens_for_user(user)
-                    return Response({
-                        "message": "Profile created successfully.",
-                        "tokens": tokens,
-                        'purpose':'create'}, status=status.HTTP_201_CREATED
-                        )
-                
-                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            invitation = DriverInvitation.objects.get(invite_code=invite_code)
             
-            # if exist user and profile
-            elif user_id:
-                try:
-                    user = User.objects.get(id=user_id) # raise user exception if user is not available
-                    profile = user.profile # raise profile exception if profile is not available
-                    serializer = ProfileCompletionSerializer(profile, data=request.data, partial=True) # NOTE trigger update method since "profile" instance provided
-                    print('user_based update',request.data)
-                    tokens = self.get_tokens_for_user(user)
-                    if serializer.is_valid():
-                        serializer.save()
-                        return Response({"message": "Profile updated successfully.",
-                        "tokens": tokens,
-                        'purpose':'edit'}, status=status.HTTP_200_OK)
-                    
-                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-                
-                except User.DoesNotExist:
-                    return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-                
-                except Profile.DoesNotExist:
-                    return Response({"error": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
-                
+            if invitation.status != 'pending':
+                return Response({'error': 'Invitation already used or cancelled'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            if timezone.now() > invitation.expires_at:
+                invitation.status = 'expired'
+                invitation.save()
+                return Response({'error': 'Invitation expired'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            return Response({
+                'valid': True,
+                'operator_name': invitation.operator.name,
+                'mobile_number': invitation.mobile_number
+            })
+        except DriverInvitation.DoesNotExist:
+            return Response({'error': 'Invalid invitation code'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['post'], url_path='accept-invite', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
+    def accept_invite(self, request):
+        """Accept driver invitation (after OTP verification)"""
+        invite_code = request.data.get('invite_code')
+        
+        try:
+            invitation = DriverInvitation.objects.get(invite_code=invite_code, status='pending')
+            
+            if timezone.now() > invitation.expires_at:
+                invitation.status = 'expired'
+                invitation.save()
+                return Response({'error': 'Invitation expired'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = request.user
+            profile = user.profile
+            
+            if profile.mobile_number != invitation.mobile_number:
+                return Response({'error': 'Mobile number mismatch'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Update profile
+            profile.full_name = request.data.get('full_name')
+            profile.role = 'driver'
+            profile.save()
+            
+            # Update user email
+            email = request.data.get('email')
+            if email:
+                user.email = email
+                user.save()
+            
+            # Create Driver record
+            driver = Driver.objects.create(
+                user=user,
+                profile=profile,
+                national_id=request.data.get('national_id', ''),
+                driver_license=request.data.get('driver_license', ''),
+                driver_rating=5.0,
+                operator=invitation.operator
+            )
+            
+            # Mark invitation as accepted
+            invitation.status = 'accepted'
+            invitation.accepted_at = timezone.now()
+            invitation.accepted_by = user
+            invitation.save()
+            
+            return Response({
+                'message': 'Successfully joined fleet',
+                'driver_id': driver.id,
+                'operator_name': invitation.operator.name,
+                'profile': ProfileSerializer(profile).data
+            })
+            
+        except DriverInvitation.DoesNotExist:
+            return Response({'error': 'Invalid invitation code'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['post'], url_path='complete-profile', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
+    def complete_profile(self, request):
+        user = request.user
+        profile = user.profile
+        
+        # Update profile fields
+        profile.full_name = request.data.get('full_name', profile.full_name)
+        profile.gender = request.data.get('gender', profile.gender)
+        profile.birth_date = request.data.get('birth_date', profile.birth_date)
+        profile.address = request.data.get('address', profile.address)
+        
+        # Handle operator registration
+        role = request.data.get('role')
+        if role and role in ['driver', 'operator_admin']:
+            # Check if user already has a driver record (from invitation)
+            existing_driver = Driver.objects.filter(user=user).first()
+            
+            if existing_driver:
+                print(f'[REGISTRATION] User already has Driver record from invitation, skipping operator creation')
+                profile.role = 'driver'
             else:
-                return Response({"error": "Invalid token. No valid identification found"}, status=status.HTTP_401_UNAUTHORIZED)
+                profile.role = role
                 
-        except  (InvalidToken, TokenError) as e:
-
-            return Response({"error": f"Invalid or expired token: {str(e)}"}, status=status.HTTP_401_UNAUTHORIZED)
+                # Require password for operator_admin
+                if role == 'operator_admin':
+                    password = request.data.get('password')
+                    if not password or len(password) < 8:
+                        return Response({'error': 'Password required (min 8 characters)'}, status=status.HTTP_400_BAD_REQUEST)
+                    user.set_password(password)
+                    user.save()
+                
+                print(f'[REGISTRATION] Creating operator for role: {role}')
+                
+                # Create operator if needed
+                operator = BusOperator.objects.filter(platform_user=user).first()
+                if not operator:
+                    operator = BusOperator.objects.create(
+                        name=profile.full_name or user.username,
+                        contact_info=profile.mobile_number,
+                        uses_own_system=False,
+                        platform_user=user
+                    )
+                    print(f'[REGISTRATION] Created BusOperator ID: {operator.id}, platform_user: {user.username}')
+                
+                # For individual drivers, also create Driver record
+                if role == 'driver':
+                    driver = Driver.objects.create(
+                        user=user,
+                        profile=profile,
+                        driver_rating=5.0,
+                        operator=operator
+                    )
+                    print(f'[REGISTRATION] Created Driver ID: {driver.id} for user: {user.username}')
+        
+        profile.save()
+        
+        # Update user email (replace temp email)
+        email = request.data.get('email')
+        if email:
+            user.email = email
+            user.save()
+        
+        return Response({
+            "message": "Profile updated successfully",
+            "profile": ProfileSerializer(profile).data
+        }, status=status.HTTP_200_OK)
         
 
 
@@ -340,34 +488,7 @@ class MobileLoginView(viewsets.ViewSet):
         
 
     
-    def get_temporary_token_for_mobile(self, mobile_number):
-        refresh = RefreshToken()
-        refresh['mobile_number'] = mobile_number # number becomes part of the token's data
-        return {
-            'refresh': str(refresh),
-            'access': str(refresh.access_token)
-        }
-    
-    def is_phone_blocked(self, mobile_number):
-        number, created = TemporaryMobileVerification.objects.get_or_create(mobile_number=mobile_number)
-        if created:
-            return True
-        if number.attempts > 6:
-            return False
-        
-        number.attempts+=1
-        number.save()
-        return True
-    
-    def can_request_otp(self, mobile_number):
-        request_count = cache.get(f'otp_request_count_{mobile_number}', 0)
-        
-        
-        if request_count >= 3:
-            return False
-        
-        cache.set(f'otp_request_count_{mobile_number}', request_count + 1, timeout = 30) # Waiting time
-        return True
+
     
 
 class ProfileView(viewsets.ModelViewSet):
@@ -390,11 +511,16 @@ class ProfileView(viewsets.ModelViewSet):
         try:
             profile = Profile.objects.get(user=request.user)
             
-            # Get operator metrics if user is operator
+            # Get operator info and metrics
             operator_metrics = None
+            operator_name = None
+            is_standalone = False
             if profile.role in ['driver', 'operator_admin']:
                 try:
                     driver = Driver.objects.get(user=request.user)
+                    operator_name = driver.operator.name
+                    # Check if driver owns the operator (standalone) or works for another operator (invited)
+                    is_standalone = driver.operator.platform_user == request.user
                     operator_metrics = {
                         'is_suspended': driver.operator.metrics.is_suspended if hasattr(driver.operator, 'metrics') else False,
                         'health_score': driver.operator.metrics.health_score if hasattr(driver.operator, 'metrics') else 100,
@@ -415,6 +541,8 @@ class ProfileView(viewsets.ModelViewSet):
                     'gender': profile.gender,
                     'birth_date': profile.birth_date,
                 },
+                'operator_name': operator_name,
+                'is_standalone': is_standalone,
                 'operator_metrics': operator_metrics
             }, status=status.HTTP_200_OK)
         except Profile.DoesNotExist:

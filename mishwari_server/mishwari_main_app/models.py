@@ -9,19 +9,17 @@ from django.contrib.auth.models import User
 
 
 
-class TemporaryMobileVerification(models.Model):
-    mobile_number = models.CharField(max_length=15, unique=True)
-    otp_code = models.CharField(max_length=6,blank=True, null=True)
-    is_verified = models.BooleanField(default=False)
-    otp_sent_at = models.DateTimeField(auto_now_add=True)
-    attempts = models.IntegerField(default=0)
-
-    def otp_is_valid(self):
-        expiry_time = self.otp_sent_at + timezone.timedelta(minutes=10)
-        return timezone.now() < expiry_time
+class OTPAttempt(models.Model):
+    mobile_number = models.CharField(max_length=15, unique=True, db_index=True)
+    attempt_count = models.IntegerField(default=0)
+    last_attempt = models.DateTimeField(auto_now=True)
+    blocked_until = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        indexes = [models.Index(fields=['mobile_number', 'last_attempt'])]
     
     def __str__(self):
-        return f"{self.mobile_number} - {self.otp_code}"
+        return f"{self.mobile_number} - Attempts: {self.attempt_count}"
 
 
 class Profile(models.Model):
@@ -40,6 +38,10 @@ class Profile(models.Model):
     gender = models.CharField(max_length=10, null=True, blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='passenger')
     is_verified = models.BooleanField(default=True) # To be false later
+    
+    # Security - only for driver PIN (operator_admin uses User.password)
+    security_pin = models.CharField(max_length=128, null=True, blank=True, help_text="Hashed 6-digit PIN for drivers")
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -78,7 +80,11 @@ class BusOperator(models.Model):
     name = models.CharField(max_length=100)
     contact_info = models.CharField(max_length=100)
     uses_own_system = models.BooleanField(default=False)
-    is_verified = models.BooleanField(default=True) # To be false later 
+    is_verified = models.BooleanField(default=True) # To be false later
+    
+    # Rating cache (read-optimization)
+    avg_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00, db_index=True)
+    total_reviews = models.IntegerField(default=0) 
 
     # For platform operators only (null for external API operators)
     platform_user = models.ForeignKey(
@@ -106,6 +112,15 @@ class Bus(models.Model):
     amenities = models.JSONField(default=dict)  # Stores amenities as key-value pairs, such as AC, Wi-Fi, etc.
     is_verified = models.BooleanField(default=True)  # To be false later
     verification_documents = models.JSONField(default=dict, blank=True)  # Store document URLs
+    
+    # Rating fields
+    avg_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
+    total_reviews = models.IntegerField(default=0)
+    
+    # Amenity flags (replace JSON for faster filtering)
+    has_wifi = models.BooleanField(default=False)
+    has_ac = models.BooleanField(default=True)
+    has_usb_charging = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.bus_number} - {self.bus_type}"
@@ -120,6 +135,9 @@ class Driver(models.Model):
     operator = models.ForeignKey(BusOperator, on_delete=models.CASCADE )
     is_verified = models.BooleanField(default=True)  # To be false later
     verification_documents = models.JSONField(default=dict, blank=True)  # Store document URLs
+    
+    # Review count
+    total_reviews = models.IntegerField(default=0)
 
     
 
@@ -138,8 +156,12 @@ class Trip(models.Model):
     
     # Basic info
     operator = models.ForeignKey(BusOperator, on_delete=models.PROTECT)
-    bus = models.ForeignKey(Bus, on_delete=models.SET_NULL, null=True)
-    driver = models.ForeignKey(Driver, on_delete=models.SET_NULL, null=True)
+    bus = models.ForeignKey(Bus, on_delete=models.SET_NULL, null=True, related_name='planned_trips')
+    driver = models.ForeignKey(Driver, on_delete=models.SET_NULL, null=True, related_name='planned_trips')
+    
+    # ACTUAL resources (filled when trip starts/completes - used for RATINGS)
+    actual_bus = models.ForeignKey(Bus, on_delete=models.SET_NULL, null=True, blank=True, related_name='actual_trips')
+    actual_driver = models.ForeignKey(Driver, on_delete=models.SET_NULL, null=True, blank=True, related_name='actual_trips')
     
     from_city = models.ForeignKey(CityList, on_delete=models.PROTECT, related_name='trips_from')
     to_city = models.ForeignKey(CityList, on_delete=models.PROTECT, related_name='trips_to')
@@ -220,6 +242,13 @@ class Trip(models.Model):
     def get_min_available_seats(self):
         """Get minimum available seats across all segments"""
         return min(self.seat_matrix.values()) if self.seat_matrix else 0
+    
+    def get_resources(self):
+        """Returns actual resources if set, otherwise planned ones"""
+        return {
+            "bus": self.actual_bus or self.bus,
+            "driver": self.actual_driver or self.driver
+        }
     
 
 
@@ -376,9 +405,57 @@ class OperatorMetrics(models.Model):
     trip_limit = models.IntegerField(default=2, help_text="Max concurrent trips for new operators")
     payout_hold_hours = models.IntegerField(default=24, help_text="Hours to hold payout after trip")
     
+    # Performance metrics
+    on_time_performance = models.FloatField(default=100.0)
+    avg_response_time_minutes = models.IntegerField(default=60)
+    
     def __str__(self):
         return f"{self.operator.name} - Score: {self.health_score}"
+    
+    def recalculate_health_score(self):
+        """Calculate health score: Rating×10 - Cancellation×2 - Strikes×15"""
+        rating_score = float(self.operator.avg_rating) * 10
+        cancellation_penalty = self.cancellation_rate * 2
+        strike_penalty = self.strikes * 15
+        
+        score = rating_score - cancellation_penalty - strike_penalty
+        self.health_score = max(0, min(100, int(score)))
+        self.save()
 
+
+
+class DriverInvitation(models.Model):
+    """Driver invitation system for operator_admin"""
+    operator = models.ForeignKey(BusOperator, on_delete=models.CASCADE, related_name='invitations')
+    mobile_number = models.CharField(max_length=15)
+    invite_code = models.CharField(max_length=8, unique=True, db_index=True)
+    
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('accepted', 'Accepted'),
+            ('expired', 'Expired'),
+            ('cancelled', 'Cancelled')
+        ],
+        default='pending'
+    )
+    
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_invitations')
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    accepted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='accepted_invitations')
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['invite_code']),
+            models.Index(fields=['mobile_number', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.operator.name} -> {self.mobile_number} ({self.status})"
 
 
 class UpgradeRequest(models.Model):
@@ -433,3 +510,29 @@ class UpgradeRequest(models.Model):
             self.status = 'approved'
             self.reviewed_at = timezone.now()
             self.save()
+
+
+class TripReview(models.Model):
+    """Review system - write layer"""
+    
+    # Link to completed booking (prevents fake reviews)
+    booking = models.OneToOneField('Booking', on_delete=models.CASCADE, related_name='review')
+    
+    # Snapshots at trip time (ratings stay with original performers)
+    bus_snapshot = models.ForeignKey('Bus', on_delete=models.SET_NULL, null=True)
+    driver_snapshot = models.ForeignKey('Driver', on_delete=models.SET_NULL, null=True)
+    operator_snapshot = models.ForeignKey('BusOperator', on_delete=models.CASCADE)
+    
+    # Granular Ratings (1-5)
+    overall_rating = models.PositiveSmallIntegerField()
+    bus_condition_rating = models.PositiveSmallIntegerField(help_text="AC, Seats, Cleanliness")
+    driver_rating = models.PositiveSmallIntegerField(help_text="Punctuality, Safety, Behavior")
+    
+    comment = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        indexes = [models.Index(fields=['operator_snapshot', 'created_at'])]
+    
+    def __str__(self):
+        return f"Review {self.id} for Booking {self.booking_id}"

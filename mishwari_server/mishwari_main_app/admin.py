@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django import forms
 from django.core.exceptions import ValidationError
-from .models import Driver,Trip,CityList,TripStop,Booking,Seat,Bus,BusOperator,Passenger,TemporaryMobileVerification,Profile,OperatorMetrics,UpgradeRequest
+from .models import Driver,Trip,CityList,TripStop,Booking,Seat,Bus,BusOperator,Passenger,OTPAttempt,Profile,OperatorMetrics,UpgradeRequest,DriverInvitation,TripReview
 
 @admin.register(Driver)
 class DriverAdmin(admin.ModelAdmin):
@@ -77,11 +77,10 @@ class PassengerAdmin(admin.ModelAdmin):
     list_display = ['user', 'name', 'age', 'gender']
     search_fields = ['user__username', 'name']
 
-# admin.site.register(TemporaryMobileVerification)
-@admin.register(TemporaryMobileVerification)
-class TemporaryMobileVerificationAdmin(admin.ModelAdmin):
-    list_display = ['mobile_number', 'otp_code', 'is_verified', 'otp_sent_at', 'attempts']
-    search_fields = ['mobile_number', 'otp_code']
+@admin.register(OTPAttempt)
+class OTPAttemptAdmin(admin.ModelAdmin):
+    list_display = ['mobile_number', 'attempt_count', 'last_attempt', 'blocked_until']
+    search_fields = ['mobile_number']
 
 @admin.register(Profile)
 class ProfileAdmin(admin.ModelAdmin):
@@ -119,4 +118,24 @@ class UpgradeRequestAdmin(admin.ModelAdmin):
         queryset.update(status='rejected')
         self.message_user(request, f"{queryset.count()} upgrade requests rejected.")
     reject_requests.short_description = "Reject selected upgrade requests"
+
+@admin.register(DriverInvitation)
+class DriverInvitationAdmin(admin.ModelAdmin):
+    list_display = ['operator', 'mobile_number', 'invite_code', 'status', 'created_at', 'expires_at', 'accepted_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['operator__name', 'mobile_number', 'invite_code']
+    readonly_fields = ['invite_code', 'created_at', 'accepted_at', 'accepted_by']
+    actions = ['cancel_invitations']
+    
+    def cancel_invitations(self, request, queryset):
+        queryset.filter(status='pending').update(status='cancelled')
+        self.message_user(request, f"{queryset.count()} invitations cancelled.")
+    cancel_invitations.short_description = "Cancel selected invitations"
+
+@admin.register(TripReview)
+class TripReviewAdmin(admin.ModelAdmin):
+    list_display = ['id', 'booking', 'operator_snapshot', 'overall_rating', 'bus_condition_rating', 'driver_rating', 'created_at']
+    list_filter = ['overall_rating', 'created_at']
+    search_fields = ['booking__id', 'operator_snapshot__name', 'comment']
+    readonly_fields = ['booking', 'bus_snapshot', 'driver_snapshot', 'operator_snapshot', 'created_at']
 
