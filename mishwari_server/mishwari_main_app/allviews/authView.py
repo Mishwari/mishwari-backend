@@ -27,7 +27,8 @@ from django.core.cache import cache
 
 from ..models import Profile, BusOperator, Driver, OTPAttempt, DriverInvitation
 from datetime import timedelta
-from twilio.rest import Client 
+from twilio.rest import Client
+from ..utils.firebase_auth import verify_firebase_token 
 
 
 
@@ -53,7 +54,7 @@ class MobileLoginView(viewsets.ViewSet):
             attempt.save()
             return Response({'error': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         
-        otp_code = get_random_string(length=4, allowed_chars='0123456789')
+        otp_code = get_random_string(length=6, allowed_chars='0123456789')
         
         # Store OTP in cache (1 min expiry)
         cache.set(f'otp_{mobile_number}', otp_code, timeout=60)
@@ -208,6 +209,62 @@ class MobileLoginView(viewsets.ViewSet):
         return response
     
 
+    @action(detail=False, methods=['post'], url_path='verify-firebase-otp')
+    def verify_firebase_otp(self, request):
+        firebase_token = request.data.get('firebase_token')
+        
+        if not firebase_token:
+            return Response({'error': 'Firebase token required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Verify Firebase token and extract phone number
+            token_data = verify_firebase_token(firebase_token)
+            mobile_number = token_data['phone_number']
+            
+            # Create or get user
+            user, created = User.objects.get_or_create(
+                username=mobile_number,
+                defaults={'email': f'{mobile_number}@temp.mishwari.com'}
+            )
+            
+            # Create or get profile
+            profile, _ = Profile.objects.get_or_create(
+                user=user,
+                defaults={
+                    'mobile_number': mobile_number,
+                    'role': 'passenger'
+                }
+            )
+            
+            # Check password requirement for operator_admin
+            has_password = user.has_usable_password()
+            if not created and profile.role == 'operator_admin' and has_password:
+                password = request.data.get('password')
+                if not password:
+                    return Response({'error': 'Password required'}, status=status.HTTP_400_BAD_REQUEST)
+                if not user.check_password(password):
+                    return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
+            
+            # Clear OTP attempts
+            try:
+                attempt = OTPAttempt.objects.get(mobile_number=mobile_number)
+                attempt.attempt_count = 0
+                attempt.blocked_until = None
+                attempt.save()
+            except OTPAttempt.DoesNotExist:
+                pass
+            
+            tokens = self.get_tokens_for_user(user)
+            return Response({
+                "message": "Login successful",
+                "tokens": tokens
+            }, status=status.HTTP_200_OK)
+            
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': 'Verification failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
     @action(detail=False, methods=['patch'], url_path='verify-otp')
     def verify_otp(self, request):
         mobile_number = request.data.get('mobile_number')
