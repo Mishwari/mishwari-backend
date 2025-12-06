@@ -209,6 +209,22 @@ class MobileLoginView(viewsets.ViewSet):
         return response
     
 
+    @action(detail=False, methods=['post'], url_path='check-password-required')
+    def check_password_required(self, request):
+        """Check if password is required for login without generating OTP"""
+        mobile_number = request.data.get('mobile_number')
+        
+        requires_password = False
+        try:
+            user = User.objects.get(username=mobile_number)
+            profile = Profile.objects.get(user=user)
+            if profile.role == 'operator_admin' and user.has_usable_password():
+                requires_password = True
+        except (User.DoesNotExist, Profile.DoesNotExist):
+            pass
+        
+        return Response({'requires_password': requires_password}, status=status.HTTP_200_OK)
+    
     @action(detail=False, methods=['post'], url_path='verify-firebase-otp')
     def verify_firebase_otp(self, request):
         firebase_token = request.data.get('firebase_token')
