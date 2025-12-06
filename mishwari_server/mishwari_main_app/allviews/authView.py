@@ -344,10 +344,11 @@ class MobileLoginView(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'], url_path='change-mobile', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
     def change_mobile(self, request):
-        """Change mobile number with OTP verification"""
+        """Change mobile number with OTP or Firebase verification"""
         new_mobile = request.data.get('new_mobile')
         otp_code = request.data.get('otp_code')
         password = request.data.get('password')
+        firebase_token = request.data.get('firebase_token')
         
         profile = request.user.profile
         
@@ -356,12 +357,21 @@ class MobileLoginView(viewsets.ViewSet):
             if not password or not request.user.check_password(password):
                 return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
         
-        # Verify OTP
-        cached_otp = cache.get(f'otp_{new_mobile}')
-        emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
-        
-        if not (otp_code == emergency_code or otp_code == cached_otp):
-            return Response({'error': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
+        # Verify Firebase token or OTP
+        if firebase_token:
+            try:
+                token_data = verify_firebase_token(firebase_token)
+                verified_mobile = token_data['phone_number']
+                if verified_mobile != new_mobile:
+                    return Response({'error': 'Mobile number mismatch'}, status=status.HTTP_400_BAD_REQUEST)
+            except ValueError as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            cached_otp = cache.get(f'otp_{new_mobile}')
+            emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
+            
+            if not (otp_code == emergency_code or otp_code == cached_otp):
+                return Response({'error': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
         
         # Check if new mobile already exists
         if User.objects.filter(username=new_mobile).exclude(id=request.user.id).exists():
@@ -374,8 +384,9 @@ class MobileLoginView(viewsets.ViewSet):
         profile.mobile_number = new_mobile
         profile.save()
         
-        # Clear OTP
-        cache.delete(f'otp_{new_mobile}')
+        # Clear OTP if used
+        if not firebase_token:
+            cache.delete(f'otp_{new_mobile}')
         
         print(f'[MOBILE CHANGE] User {request.user.id} changed mobile from {old_mobile} to {new_mobile}')
         
@@ -583,7 +594,18 @@ class ProfileView(viewsets.ModelViewSet):
                         'health_score': driver.operator.metrics.health_score if hasattr(driver.operator, 'metrics') else 100,
                     }
                 except Driver.DoesNotExist:
-                    pass
+                    # For operator_admin without Driver record, get operator from BusOperator
+                    if profile.role == 'operator_admin':
+                        try:
+                            operator = BusOperator.objects.get(platform_user=request.user)
+                            operator_name = operator.name
+                            is_standalone = True
+                            operator_metrics = {
+                                'is_suspended': operator.metrics.is_suspended if hasattr(operator, 'metrics') else False,
+                                'health_score': operator.metrics.health_score if hasattr(operator, 'metrics') else 100,
+                            }
+                        except BusOperator.DoesNotExist:
+                            pass
             
             return Response({
                 'id': request.user.id,
