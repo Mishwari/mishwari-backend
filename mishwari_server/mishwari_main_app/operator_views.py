@@ -46,15 +46,18 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
     
     def create(self, request, *args, **kwargs):
-        """Create bus - operator_admin only"""
-        if request.user.profile.role != 'operator_admin':
-            return Response({'error': 'Only operator_admin can create buses'}, status=status.HTTP_403_FORBIDDEN)
         """Create bus with role-based validation"""
         profile = request.user.profile
         operator = get_operator_for_user(request.user)
         
-        # Limit individual drivers to 1 bus
-        if profile.role == 'driver':
+        # Check if user is standalone driver or operator_admin
+        is_standalone = operator.platform_user == request.user
+        
+        if profile.role == 'driver' and not is_standalone:
+            return Response({'error': 'Invited drivers cannot create buses'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Limit standalone drivers to 1 bus
+        if profile.role == 'driver' and is_standalone:
             existing_buses = Bus.objects.filter(operator=operator).count()
             
             if existing_buses >= 1:
@@ -72,9 +75,13 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
         serializer.save(operator=operator)
     
     def update(self, request, *args, **kwargs):
-        """Update bus - operator_admin only"""
-        if request.user.profile.role != 'operator_admin':
-            return Response({'error': 'Only operator_admin can update buses'}, status=status.HTTP_403_FORBIDDEN)
+        """Update bus - operator_admin and standalone drivers"""
+        profile = request.user.profile
+        operator = get_operator_for_user(request.user)
+        is_standalone = operator.platform_user == request.user
+        
+        if profile.role == 'driver' and not is_standalone:
+            return Response({'error': 'Invited drivers cannot update buses'}, status=status.HTTP_403_FORBIDDEN)
         
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
@@ -89,9 +96,7 @@ class OperatorFleetViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     def partial_update(self, request, *args, **kwargs):
-        """Partial update bus - operator_admin only"""
-        if request.user.profile.role != 'operator_admin':
-            return Response({'error': 'Only operator_admin can update buses'}, status=status.HTTP_403_FORBIDDEN)
+        """Partial update bus - operator_admin and standalone drivers"""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
     
@@ -142,16 +147,33 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
         
         return queryset
     
-    def create(self, request, *args, **kwargs):
-        """Create trip - operator_admin only"""
-        if request.user.profile.role != 'operator_admin':
-            return Response({'error': 'Only operator_admin can create trips'}, status=status.HTTP_403_FORBIDDEN)
-        
+    def update(self, request, *args, **kwargs):
+        """Update trip - operator_admin and standalone drivers"""
         profile = request.user.profile
         operator = get_operator_for_user(request.user)
+        is_standalone = operator.platform_user == request.user
         
-        # Enforce trip limit for individual drivers
-        if profile.role == 'driver':
+        if profile.role == 'driver' and not is_standalone:
+            return Response({'error': 'Invited drivers cannot update trips'}, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().update(request, *args, **kwargs)
+    
+    def partial_update(self, request, *args, **kwargs):
+        """Partial update trip - operator_admin and standalone drivers"""
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+    
+    def create(self, request, *args, **kwargs):
+        """Create trip - operator_admin and standalone drivers"""
+        profile = request.user.profile
+        operator = get_operator_for_user(request.user)
+        is_standalone = operator.platform_user == request.user
+        
+        if profile.role == 'driver' and not is_standalone:
+            return Response({'error': 'Invited drivers cannot create trips'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Enforce trip limit for standalone drivers
+        if profile.role == 'driver' and is_standalone:
             active_trips = Trip.objects.filter(
                 operator=operator,
                 status__in=['draft', 'published', 'active']
@@ -337,12 +359,14 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
     def set_actual_resources(self, request, pk=None):
         """Set actual bus/driver if different from planned"""
         trip = self.get_object()
+        profile = request.user.profile
+        operator = get_operator_for_user(request.user)
+        is_standalone = operator.platform_user == request.user
         
-        if request.user.profile.role != 'operator_admin':
-            return Response({'error': 'Only operator_admin can swap resources'}, 
+        if profile.role == 'driver' and not is_standalone:
+            return Response({'error': 'Invited drivers cannot swap resources'}, 
                           status=status.HTTP_403_FORBIDDEN)
         
-        operator = get_operator_for_user(request.user)
         actual_bus_id = request.data.get('actual_bus')
         actual_driver_id = request.data.get('actual_driver')
         
@@ -363,13 +387,20 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
     def complete_trip(self, request, pk=None):
         """Mark trip as completed and complete all its bookings"""
         trip = self.get_object()
-        
-        # Permission check: operator_admin or assigned driver
         profile = request.user.profile
+        operator = get_operator_for_user(request.user)
+        is_standalone = operator.platform_user == request.user
+        
+        # Permission check: operator_admin, standalone driver, or assigned invited driver
         if profile.role == 'driver':
-            driver = Driver.objects.get(user=request.user)
-            if trip.driver != driver and trip.actual_driver != driver:
-                return Response({'error': 'Not your trip'}, status=status.HTTP_403_FORBIDDEN)
+            if is_standalone:
+                # Standalone driver can complete their own trips
+                pass
+            else:
+                # Invited driver can only complete assigned trips
+                driver = Driver.objects.get(user=request.user)
+                if trip.driver != driver and trip.actual_driver != driver:
+                    return Response({'error': 'Not your trip'}, status=status.HTTP_403_FORBIDDEN)
         elif profile.role != 'operator_admin':
             return Response({'error': 'Only drivers/operators can complete trips'}, status=status.HTTP_403_FORBIDDEN)
         

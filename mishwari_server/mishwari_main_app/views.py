@@ -180,7 +180,7 @@ class TripSearchView(viewsets.ViewSet):
                 'available_seats': available_seats,
                 'fare': fare,
                 'price': fare,
-                'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'amenities': trip.bus.amenities} if trip.bus else None,
+                'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'has_wifi': trip.bus.has_wifi, 'has_ac': trip.bus.has_ac, 'has_usb_charging': trip.bus.has_usb_charging} if trip.bus else None,
                 'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
                 'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
                 'trip_type': trip.trip_type,

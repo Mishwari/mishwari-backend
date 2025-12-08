@@ -237,20 +237,38 @@ class MobileLoginView(viewsets.ViewSet):
             token_data = verify_firebase_token(firebase_token)
             mobile_number = token_data['phone_number']
             
+            # Check if user has pending invitation
+            pending_invitation = DriverInvitation.objects.filter(
+                mobile_number=mobile_number,
+                status='pending',
+                expires_at__gt=timezone.now()
+            ).first()
+            
             # Create or get user
             user, created = User.objects.get_or_create(
                 username=mobile_number,
                 defaults={'email': f'{mobile_number}@temp.mishwari.com'}
             )
             
-            # Create or get profile
+            # Create or get profile with appropriate role
             profile, _ = Profile.objects.get_or_create(
                 user=user,
                 defaults={
                     'mobile_number': mobile_number,
-                    'role': 'passenger'
+                    'role': 'driver' if pending_invitation else 'passenger'
                 }
             )
+            
+            # Create Driver record immediately if pending invitation exists
+            if pending_invitation:
+                Driver.objects.get_or_create(
+                    user=user,
+                    defaults={
+                        'profile': profile,
+                        'driver_rating': 5.0,
+                        'operator': pending_invitation.operator
+                    }
+                )
             
             # Check password requirement for operator_admin
             has_password = user.has_usable_password()
@@ -295,20 +313,38 @@ class MobileLoginView(viewsets.ViewSet):
         emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
         
         if otp_code == emergency_code or otp_code == cached_otp:
+            # Check if user has pending invitation
+            pending_invitation = DriverInvitation.objects.filter(
+                mobile_number=mobile_number,
+                status='pending',
+                expires_at__gt=timezone.now()
+            ).first()
+            
             # Create user with phone as username
             user, created = User.objects.get_or_create(
                 username=mobile_number,
                 defaults={'email': f'{mobile_number}@temp.mishwari.com'}
             )
             
-            # Create empty profile (full_name is None)
+            # Create profile with appropriate role
             profile, _ = Profile.objects.get_or_create(
                 user=user,
                 defaults={
                     'mobile_number': mobile_number,
-                    'role': 'passenger'
+                    'role': 'driver' if pending_invitation else 'passenger'
                 }
             )
+            
+            # Create Driver record immediately if pending invitation exists
+            if pending_invitation:
+                Driver.objects.get_or_create(
+                    user=user,
+                    defaults={
+                        'profile': profile,
+                        'driver_rating': 5.0,
+                        'operator': pending_invitation.operator
+                    }
+                )
             
             # Check if user has password (only operator_admin should require password)
             has_password = user.has_usable_password()
@@ -357,6 +393,33 @@ class MobileLoginView(viewsets.ViewSet):
         cache.set(f'transaction_{request.user.id}', transaction_token, timeout=300)
         
         return Response({'transaction_token': transaction_token}, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['post'], url_path='change-password', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
+    def change_password(self, request):
+        """Change password for operator_admin"""
+        current_password = request.data.get('current_password')
+        new_password = request.data.get('new_password')
+        
+        profile = request.user.profile
+        
+        if profile.role != 'operator_admin':
+            return Response({'error': 'Only operator_admin can change password'}, status=status.HTTP_403_FORBIDDEN)
+        
+        if not current_password or not new_password:
+            return Response({'error': 'Current and new password required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not request.user.check_password(current_password):
+            return Response({'error': 'Current password is incorrect'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        if len(new_password) < 8:
+            return Response({'error': 'New password must be at least 8 characters'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        request.user.set_password(new_password)
+        request.user.save()
+        
+        print(f'[PASSWORD CHANGE] User {request.user.id} changed password successfully')
+        
+        return Response({'message': 'Password updated successfully'}, status=status.HTTP_200_OK)
     
     @action(detail=False, methods=['post'], url_path='change-mobile', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
     def change_mobile(self, request):
@@ -438,7 +501,7 @@ class MobileLoginView(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'], url_path='accept-invite', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
     def accept_invite(self, request):
-        """Accept driver invitation (after OTP verification)"""
+        """Complete invited driver profile (Driver record already created during OTP)"""
         invite_code = request.data.get('invite_code')
         
         try:
@@ -455,9 +518,8 @@ class MobileLoginView(viewsets.ViewSet):
             if profile.mobile_number != invitation.mobile_number:
                 return Response({'error': 'Mobile number mismatch'}, status=status.HTTP_400_BAD_REQUEST)
             
-            # Update profile
+            # Update profile details
             profile.full_name = request.data.get('full_name')
-            profile.role = 'driver'
             profile.save()
             
             # Update user email
@@ -466,15 +528,11 @@ class MobileLoginView(viewsets.ViewSet):
                 user.email = email
                 user.save()
             
-            # Create Driver record
-            driver = Driver.objects.create(
-                user=user,
-                profile=profile,
-                national_id=request.data.get('national_id', ''),
-                driver_license=request.data.get('driver_license', ''),
-                driver_rating=5.0,
-                operator=invitation.operator
-            )
+            # Update Driver record (already created during OTP verification)
+            driver = Driver.objects.get(user=user)
+            driver.national_id = request.data.get('national_id', '')
+            driver.driver_license = request.data.get('driver_license', '')
+            driver.save()
             
             # Mark invitation as accepted
             invitation.status = 'accepted'
@@ -491,31 +549,32 @@ class MobileLoginView(viewsets.ViewSet):
             
         except DriverInvitation.DoesNotExist:
             return Response({'error': 'Invalid invitation code'}, status=status.HTTP_404_NOT_FOUND)
+        except Driver.DoesNotExist:
+            return Response({'error': 'Driver record not found'}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['post'], url_path='complete-profile', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
     def complete_profile(self, request):
+        from ..models import CityList
         user = request.user
         profile = user.profile
         
-        # Update profile fields
-        profile.full_name = request.data.get('full_name', profile.full_name)
-        profile.gender = request.data.get('gender', profile.gender)
-        profile.birth_date = request.data.get('birth_date', profile.birth_date)
-        profile.address = request.data.get('address', profile.address)
-        
-        # Handle operator registration
+        # Extract fields from request
+        operator_name = request.data.get('operator_name')
+        operator_contact = request.data.get('operator_contact')
+        operational_regions = request.data.get('operational_regions')
+        driver_license = request.data.get('driver_license')
+        national_id = request.data.get('national_id')
         role = request.data.get('role')
+        
+        # Handle initial operator registration FIRST
         if role and role in ['driver', 'operator_admin']:
-            # Check if user already has a driver record (from invitation)
             existing_driver = Driver.objects.filter(user=user).first()
             
             if existing_driver:
-                print(f'[REGISTRATION] User already has Driver record from invitation, skipping operator creation')
                 profile.role = 'driver'
             else:
                 profile.role = role
                 
-                # Require password for operator_admin
                 if role == 'operator_admin':
                     password = request.data.get('password')
                     if not password or len(password) < 8:
@@ -523,36 +582,80 @@ class MobileLoginView(viewsets.ViewSet):
                     user.set_password(password)
                     user.save()
                 
-                print(f'[REGISTRATION] Creating operator for role: {role}')
-                
-                # Create operator if needed
                 operator = BusOperator.objects.filter(platform_user=user).first()
                 if not operator:
                     operator = BusOperator.objects.create(
-                        name=profile.full_name or user.username,
-                        contact_info=profile.mobile_number,
+                        name=operator_name or request.data.get('full_name') or user.username,
+                        contact_info=operator_contact or profile.mobile_number,
                         uses_own_system=False,
                         platform_user=user
                     )
-                    print(f'[REGISTRATION] Created BusOperator ID: {operator.id}, platform_user: {user.username}')
+                    if operational_regions:
+                        cities = CityList.objects.filter(city__in=operational_regions)
+                        operator.operational_regions.set(cities)
                 
-                # For individual drivers, also create Driver record
                 if role == 'driver':
-                    driver = Driver.objects.create(
+                    Driver.objects.create(
                         user=user,
                         profile=profile,
                         driver_rating=5.0,
-                        operator=operator
+                        operator=operator,
+                        driver_license=driver_license or '',
+                        national_id=national_id or ''
                     )
-                    print(f'[REGISTRATION] Created Driver ID: {driver.id} for user: {user.username}')
         
+        # Update profile fields
+        profile.full_name = request.data.get('full_name', profile.full_name)
+        profile.gender = request.data.get('gender', profile.gender)
+        profile.birth_date = request.data.get('birth_date', profile.birth_date)
+        profile.address = request.data.get('address', profile.address)
         profile.save()
         
-        # Update user email (replace temp email)
+        # Update user email
         email = request.data.get('email')
         if email:
             user.email = email
             user.save()
+        
+        # Update operator details if standalone (for existing operators)
+        if operator_name or operator_contact or operational_regions is not None:
+            try:
+                driver = Driver.objects.get(user=user)
+                if driver.operator.platform_user == user:
+                    if operator_name:
+                        driver.operator.name = operator_name
+                    if operator_contact:
+                        driver.operator.contact_info = operator_contact
+                    if operational_regions is not None:
+                        cities = CityList.objects.filter(city__in=operational_regions)
+                        driver.operator.operational_regions.set(cities)
+                    driver.operator.save()
+            except Driver.DoesNotExist:
+                if profile.role == 'operator_admin':
+                    try:
+                        operator = BusOperator.objects.get(platform_user=user)
+                        if operator_name:
+                            operator.name = operator_name
+                        if operator_contact:
+                            operator.contact_info = operator_contact
+                        if operational_regions is not None:
+                            cities = CityList.objects.filter(city__in=operational_regions)
+                            operator.operational_regions.set(cities)
+                        operator.save()
+                    except BusOperator.DoesNotExist:
+                        pass
+        
+        # Update driver details (allow all drivers to update their own info)
+        if driver_license or national_id:
+            try:
+                driver = Driver.objects.get(user=user)
+                if driver_license:
+                    driver.driver_license = driver_license
+                if national_id:
+                    driver.national_id = national_id
+                driver.save()
+            except Driver.DoesNotExist:
+                pass
         
         return Response({
             "message": "Profile updated successfully",
@@ -623,6 +726,21 @@ class ProfileView(viewsets.ModelViewSet):
                         except BusOperator.DoesNotExist:
                             pass
             
+            # Check for pending invitation code
+            pending_invitation_code = None
+            if profile.role == 'driver' and not profile.full_name:
+                try:
+                    driver = Driver.objects.get(user=request.user)
+                    if driver.operator.platform_user != request.user:
+                        invitation = DriverInvitation.objects.filter(
+                            mobile_number=profile.mobile_number,
+                            operator=driver.operator
+                        ).order_by('-created_at').first()
+                        if invitation:
+                            pending_invitation_code = invitation.invite_code
+                except Driver.DoesNotExist:
+                    pass
+            
             return Response({
                 'id': request.user.id,
                 'username': request.user.username,
@@ -638,7 +756,8 @@ class ProfileView(viewsets.ModelViewSet):
                 },
                 'operator_name': operator_name,
                 'is_standalone': is_standalone,
-                'operator_metrics': operator_metrics
+                'operator_metrics': operator_metrics,
+                'pending_invitation_code': pending_invitation_code
             }, status=status.HTTP_200_OK)
         except Profile.DoesNotExist:
             return Response({'error': 'Profile not found'}, status=status.HTTP_404_NOT_FOUND)

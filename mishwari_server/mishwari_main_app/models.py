@@ -109,7 +109,6 @@ class Bus(models.Model):
     bus_number = models.CharField(max_length=10, null=False, blank=False, unique=True)
     bus_type = models.CharField(max_length=30, null=False, blank=False)
     capacity = models.IntegerField()
-    amenities = models.JSONField(default=dict)  # Stores amenities as key-value pairs, such as AC, Wi-Fi, etc.
     is_verified = models.BooleanField(default=True)  # To be false later
     verification_documents = models.JSONField(default=dict, blank=True)  # Store document URLs
     
@@ -117,9 +116,9 @@ class Bus(models.Model):
     avg_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
     total_reviews = models.IntegerField(default=0)
     
-    # Amenity flags (replace JSON for faster filtering)
+    # Amenity flags
     has_wifi = models.BooleanField(default=False)
-    has_ac = models.BooleanField(default=True)
+    has_ac = models.BooleanField(default=False)
     has_usb_charging = models.BooleanField(default=False)
 
     def __str__(self):

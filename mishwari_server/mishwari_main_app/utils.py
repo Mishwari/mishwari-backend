@@ -11,7 +11,7 @@ def send_otp_via_fast2sms(mobile_number, otp_code):
         "numbers": mobile_number,
 
         # # if quick
-        # "message": f"كود التحقق لمشواري هو: {otp_code}",
+        # "message": f"كود التحقق ليلا باص هو: {otp_code}",
         # "language": "arabic",
         # "route": "q",
         #######################
