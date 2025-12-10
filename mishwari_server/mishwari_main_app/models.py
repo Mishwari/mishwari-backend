@@ -25,9 +25,9 @@ class OTPAttempt(models.Model):
 class Profile(models.Model):
     ROLE_CHOICES = [
         ('passenger', 'Passenger'),
-        ('driver', 'Driver'),
+        ('standalone_driver', 'Standalone Driver'),
+        ('invited_driver', 'Invited Driver'),
         ('operator_admin', 'Operator Admin'),
-        ('operator_staff', 'Operator Staff')
     ]
     
     user = models.OneToOneField(User, on_delete=models.CASCADE)
@@ -492,11 +492,12 @@ class UpgradeRequest(models.Model):
         return f"{self.profile.full_name} - {self.status}"
     
     def approve_upgrade(self):
-        """Approve upgrade and migrate role"""
+        """Approve upgrade and migrate role from standalone_driver to operator_admin"""
         with transaction.atomic():
-            # Update profile role
-            self.profile.role = 'operator_admin'
-            self.profile.save()
+            # Change role from standalone_driver to operator_admin
+            if self.profile.role == 'standalone_driver':
+                self.profile.role = 'operator_admin'
+                self.profile.save()
             
             # Update operator details
             driver = Driver.objects.filter(user=self.user).first()

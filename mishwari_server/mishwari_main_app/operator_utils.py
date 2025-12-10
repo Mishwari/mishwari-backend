@@ -17,7 +17,7 @@ def get_operator_for_user(user):
     """
     profile = user.profile
     
-    if profile.role == 'driver':
+    if profile.role in ['standalone_driver', 'invited_driver']:
         try:
             driver = Driver.objects.select_related('operator').get(user=user)
             return driver.operator

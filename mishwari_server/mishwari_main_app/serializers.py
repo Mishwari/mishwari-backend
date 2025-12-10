@@ -29,22 +29,11 @@ class ProfileSerializer(serializers.ModelSerializer):
     
     def get_is_standalone(self, obj):
         """Check if user is standalone (owns their operator)"""
-        if obj.role in ['driver', 'operator_admin']:
-            try:
-                driver = Driver.objects.get(user=obj.user)
-                return driver.operator.platform_user == obj.user
-            except Driver.DoesNotExist:
-                if obj.role == 'operator_admin':
-                    try:
-                        operator = BusOperator.objects.get(platform_user=obj.user)
-                        return True
-                    except BusOperator.DoesNotExist:
-                        pass
-        return False
+        return obj.role in ['standalone_driver', 'operator_admin']
     
     def get_operator_name(self, obj):
         """Get operator name if user is driver or operator_admin"""
-        if obj.role in ['driver', 'operator_admin']:
+        if obj.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
             try:
                 driver = Driver.objects.get(user=obj.user)
                 return driver.operator.name
@@ -59,7 +48,7 @@ class ProfileSerializer(serializers.ModelSerializer):
     
     def get_operator_contact(self, obj):
         """Get operator contact info"""
-        if obj.role in ['driver', 'operator_admin']:
+        if obj.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
             try:
                 driver = Driver.objects.get(user=obj.user)
                 return driver.operator.contact_info
@@ -74,7 +63,7 @@ class ProfileSerializer(serializers.ModelSerializer):
     
     def get_driver_license(self, obj):
         """Get driver license if user is driver"""
-        if obj.role in ['driver', 'operator_admin']:
+        if obj.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
             try:
                 driver = Driver.objects.get(user=obj.user)
                 return driver.driver_license
@@ -84,7 +73,7 @@ class ProfileSerializer(serializers.ModelSerializer):
     
     def get_national_id(self, obj):
         """Get national ID if user is driver"""
-        if obj.role in ['driver', 'operator_admin']:
+        if obj.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
             try:
                 driver = Driver.objects.get(user=obj.user)
                 return driver.national_id
@@ -94,7 +83,7 @@ class ProfileSerializer(serializers.ModelSerializer):
     
     def get_operational_regions(self, obj):
         """Get operational regions"""
-        if obj.role in ['driver', 'operator_admin']:
+        if obj.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
             try:
                 driver = Driver.objects.get(user=obj.user)
                 return list(driver.operator.operational_regions.values_list('city', flat=True))
@@ -110,21 +99,16 @@ class ProfileSerializer(serializers.ModelSerializer):
     def get_pending_invitation_code(self, obj):
         """Get invitation code if invited driver has incomplete profile"""
         from .models import DriverInvitation
-        from django.utils import timezone
         
-        # Check if user is invited driver (not standalone) with incomplete profile
-        if obj.role == 'driver' and not obj.full_name:
+        if obj.role == 'invited_driver' and not obj.full_name:
             try:
                 driver = Driver.objects.get(user=obj.user)
-                # Check if driver is invited (not standalone)
-                if driver.operator.platform_user != obj.user:
-                    # Find the invitation (can be pending or accepted)
-                    invitation = DriverInvitation.objects.filter(
-                        mobile_number=obj.mobile_number,
-                        operator=driver.operator
-                    ).order_by('-created_at').first()
-                    if invitation:
-                        return invitation.invite_code
+                invitation = DriverInvitation.objects.filter(
+                    mobile_number=obj.mobile_number,
+                    operator=driver.operator
+                ).order_by('-created_at').first()
+                if invitation:
+                    return invitation.invite_code
             except Driver.DoesNotExist:
                 pass
         return None

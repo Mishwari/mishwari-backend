@@ -599,7 +599,7 @@ class BookingViewSet(viewsets.ModelViewSet):
             return Booking.objects.filter(user=user)
         
         # Drivers see bookings for their trips
-        elif profile.role == 'driver':
+        elif profile.role in ['standalone_driver', 'invited_driver']:
             try:
                 driver = Driver.objects.get(user=user)
                 return Booking.objects.filter(trip__driver=driver) | Booking.objects.filter(trip__actual_driver=driver)
@@ -702,7 +702,7 @@ class BookingViewSet(viewsets.ModelViewSet):
             if booking.trip.operator == operator:
                 has_permission = True
         # 3. Driver assigned to the trip
-        elif profile.role == 'driver':
+        elif profile.role in ['standalone_driver', 'invited_driver']:
             try:
                 driver = Driver.objects.get(user=user)
                 if booking.trip.driver == driver:
@@ -729,12 +729,12 @@ class BookingViewSet(viewsets.ModelViewSet):
         
         # Permission check
         profile = request.user.profile
-        if profile.role not in ['driver', 'operator_admin']:
+        if profile.role not in ['standalone_driver', 'invited_driver', 'operator_admin']:
             return Response({'error': 'Only drivers/operators can complete bookings'}, 
                           status=status.HTTP_403_FORBIDDEN)
         
         # Verify ownership
-        if profile.role == 'driver':
+        if profile.role in ['standalone_driver', 'invited_driver']:
             driver = Driver.objects.get(user=request.user)
             if booking.trip.driver != driver:
                 return Response({'error': 'Not your trip'}, 
@@ -754,11 +754,11 @@ class BookingViewSet(viewsets.ModelViewSet):
         booking = self.get_object()
         
         profile = request.user.profile
-        if profile.role not in ['driver', 'operator_admin']:
+        if profile.role not in ['standalone_driver', 'invited_driver', 'operator_admin']:
             return Response({'error': 'Only drivers/operators can confirm bookings'}, 
                           status=status.HTTP_403_FORBIDDEN)
         
-        if profile.role == 'driver':
+        if profile.role in ['standalone_driver', 'invited_driver']:
             driver = Driver.objects.get(user=request.user)
             if booking.trip.driver != driver and booking.trip.actual_driver != driver:
                 return Response({'error': 'Not your trip'}, 

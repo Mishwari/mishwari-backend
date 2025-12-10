@@ -255,7 +255,7 @@ class MobileLoginView(viewsets.ViewSet):
                 user=user,
                 defaults={
                     'mobile_number': mobile_number,
-                    'role': 'driver' if pending_invitation else 'passenger'
+                    'role': 'invited_driver' if pending_invitation else 'passenger'
                 }
             )
             
@@ -331,7 +331,7 @@ class MobileLoginView(viewsets.ViewSet):
                 user=user,
                 defaults={
                     'mobile_number': mobile_number,
-                    'role': 'driver' if pending_invitation else 'passenger'
+                    'role': 'invited_driver' if pending_invitation else 'passenger'
                 }
             )
             
@@ -518,8 +518,9 @@ class MobileLoginView(viewsets.ViewSet):
             if profile.mobile_number != invitation.mobile_number:
                 return Response({'error': 'Mobile number mismatch'}, status=status.HTTP_400_BAD_REQUEST)
             
-            # Update profile details
+            # Update profile details (keep role as 'invited_driver')
             profile.full_name = request.data.get('full_name')
+            # Don't change role - it's already 'invited_driver'
             profile.save()
             
             # Update user email
@@ -571,10 +572,16 @@ class MobileLoginView(viewsets.ViewSet):
             existing_driver = Driver.objects.filter(user=user).first()
             
             if existing_driver:
-                profile.role = 'driver'
+                # User already has Driver record (invited driver)
+                profile.role = 'invited_driver'
             else:
-                profile.role = role
+                # New standalone driver or operator_admin
+                if role == 'driver':
+                    profile.role = 'standalone_driver'
+                else:
+                    profile.role = 'operator_admin'
                 
+                # Create operator for standalone users
                 if role == 'operator_admin':
                     password = request.data.get('password')
                     if not password or len(password) < 8:
@@ -701,13 +708,11 @@ class ProfileView(viewsets.ModelViewSet):
             # Get operator info and metrics
             operator_metrics = None
             operator_name = None
-            is_standalone = False
-            if profile.role in ['driver', 'operator_admin']:
+            is_standalone = profile.role in ['standalone_driver', 'operator_admin']
+            if profile.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
                 try:
                     driver = Driver.objects.get(user=request.user)
                     operator_name = driver.operator.name
-                    # Check if driver owns the operator (standalone) or works for another operator (invited)
-                    is_standalone = driver.operator.platform_user == request.user
                     operator_metrics = {
                         'is_suspended': driver.operator.metrics.is_suspended if hasattr(driver.operator, 'metrics') else False,
                         'health_score': driver.operator.metrics.health_score if hasattr(driver.operator, 'metrics') else 100,
@@ -718,7 +723,6 @@ class ProfileView(viewsets.ModelViewSet):
                         try:
                             operator = BusOperator.objects.get(platform_user=request.user)
                             operator_name = operator.name
-                            is_standalone = True
                             operator_metrics = {
                                 'is_suspended': operator.metrics.is_suspended if hasattr(operator, 'metrics') else False,
                                 'health_score': operator.metrics.health_score if hasattr(operator, 'metrics') else 100,
@@ -728,16 +732,15 @@ class ProfileView(viewsets.ModelViewSet):
             
             # Check for pending invitation code
             pending_invitation_code = None
-            if profile.role == 'driver' and not profile.full_name:
+            if profile.role == 'invited_driver' and not profile.full_name:
                 try:
                     driver = Driver.objects.get(user=request.user)
-                    if driver.operator.platform_user != request.user:
-                        invitation = DriverInvitation.objects.filter(
-                            mobile_number=profile.mobile_number,
-                            operator=driver.operator
-                        ).order_by('-created_at').first()
-                        if invitation:
-                            pending_invitation_code = invitation.invite_code
+                    invitation = DriverInvitation.objects.filter(
+                        mobile_number=profile.mobile_number,
+                        operator=driver.operator
+                    ).order_by('-created_at').first()
+                    if invitation:
+                        pending_invitation_code = invitation.invite_code
                 except Driver.DoesNotExist:
                     pass
             
