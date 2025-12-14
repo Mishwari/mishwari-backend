@@ -44,6 +44,14 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-##58%te*9*nsa3k_^b*
 DEBUG = os.getenv('DJANGO_DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['*']
+
+# CSRF Settings for production
+CSRF_TRUSTED_ORIGINS = [
+    'https://api.yallabus.app',
+    'https://yallabus.app',
+    'https://www.yallabus.app',
+    'https://driver.yallabus.app',
+]
 # ['localhost','127.0.0.1','mishwari.ye','driver.mishwari.ye','dolphin-striking-briefly.ngrok-free.app','172.29.240.1','0.0.0.0']
 #ngrok http --domain=[static-domain] 80
 
@@ -215,7 +223,10 @@ STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # WhiteNoise configuration
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+if DEBUG:
+    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
+else:
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
 
 REST_FRAMEWORK = {
