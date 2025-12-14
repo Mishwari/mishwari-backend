@@ -6,9 +6,9 @@
 #user-tools a { color: #e6f2f7 !important; }
 #user-tools a:hover { color: #fff !important; }
 
-/* Links - Primary Blue */
-a:link, a:visited { color: #005687 !important; }
-a:hover, a:active { color: #004a73 !important; }
+/* Links - Brighter Blue #0088cc */
+a:link, a:visited { color: #0088cc !important; }
+a:hover, a:active { color: #0099dd !important; }
 
 /* Buttons - Primary Blue */
 .button, input[type=submit], input[type=button], .submit-row input, button { 
@@ -46,7 +46,7 @@ div.breadcrumbs {
     color: #fff !important; 
 }
 #changelist-filter li.selected a { 
-    color: #005687 !important; 
+    color: #0088cc !important; 
     font-weight: bold; 
 }
 
@@ -61,5 +61,5 @@ div.breadcrumbs {
 
 /* Focus States */
 input:focus, textarea:focus, select:focus { 
-    border-color: #005687 !important; 
+    border-color: #0088cc !important; 
 }
