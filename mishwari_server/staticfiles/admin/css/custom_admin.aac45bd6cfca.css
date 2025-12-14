@@ -1,0 +1,65 @@
+/* YallaBus Admin - Brand Colors: #042f40, #005687 */
+
+/* Header - Primary Blue */
+#header { background: #005687 !important; color: #fff !important; }
+#branding h1, #branding h1 a:link, #branding h1 a:visited { color: #fff !important; }
+#user-tools a { color: #e6f2f7 !important; }
+#user-tools a:hover { color: #fff !important; }
+
+/* Links - Primary Blue */
+a:link, a:visited { color: #005687 !important; }
+a:hover, a:active { color: #004a73 !important; }
+
+/* Buttons - Primary Blue */
+.button, input[type=submit], input[type=button], .submit-row input, button { 
+    background: #005687 !important; 
+    color: #fff !important; 
+}
+.button:hover, input[type=submit]:hover, input[type=button]:hover, button:hover { 
+    background: #004a73 !important; 
+}
+
+/* Module Headers - Primary Blue */
+.module h2, .module caption, .inline-group h2 { 
+    background: #005687 !important; 
+    color: #fff !important; 
+}
+
+/* Breadcrumbs */
+div.breadcrumbs { 
+    background: #e6f2f7 !important; 
+    color: #042f40 !important; 
+}
+
+/* Object Tools */
+.object-tools a:link, .object-tools a:visited { 
+    background: #005687 !important; 
+    color: #fff !important; 
+}
+.object-tools a:hover { 
+    background: #004a73 !important; 
+}
+
+/* Changelist Filter */
+#changelist-filter h2 { 
+    background: #005687 !important; 
+    color: #fff !important; 
+}
+#changelist-filter li.selected a { 
+    color: #005687 !important; 
+    font-weight: bold; 
+}
+
+/* Pagination */
+.paginator a:link, .paginator a:visited { 
+    background: #005687 !important; 
+    color: #fff !important; 
+}
+.paginator a:hover { 
+    background: #004a73 !important; 
+}
+
+/* Focus States */
+input:focus, textarea:focus, select:focus { 
+    border-color: #005687 !important; 
+}

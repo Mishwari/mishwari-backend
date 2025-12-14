@@ -4,26 +4,14 @@ from rest_framework import routers
 from django.contrib.auth.models import User
 
 from .views import (
-    TripsViewSet,DriverView,TripStopView,JwtUserView,
-    DriverTripView,JwtDriverView,RouteViewSet,
-    TripSearchView,CitiesView,BookingViewSet,BookingTripsViewSet,PassengersViewSet,
-    TripReviewViewSet,
-    stripe_webhook
-    )
-
-from .operator_views import (
-    OperatorFleetViewSet,
-    OperatorTripViewSet,
-    PhysicalBookingViewSet,
-    DriverManagementViewSet,
-    UpgradeRequestViewSet
+    TripsViewSet, DriverView, TripStopView, JwtUserView,
+    DriverTripView, JwtDriverView, RouteViewSet,
+    TripSearchView, CitiesView, BookingViewSet, BookingTripsViewSet, PassengersViewSet,
+    TripReviewViewSet, stripe_webhook,
+    OperatorFleetViewSet, OperatorTripViewSet, PhysicalBookingViewSet,
+    DriverManagementViewSet, UpgradeRequestViewSet,
+    MobileLoginView, whatsapp_webhook, ProfileView
 )
-    
-
-from .allviews.authView import (MobileLoginView, 
-                                whatsapp_webhook,
-                                ProfileView
-                                )
 
 router = routers.DefaultRouter()
 # router.register(r"users", UserViewSet)

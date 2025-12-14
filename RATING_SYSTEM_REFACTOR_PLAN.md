@@ -187,7 +187,7 @@ def get_driver(self, obj):
     return DriverSerializer(resources['driver']).data if resources['driver'] else None
 ```
 
-### 2.6 Update BookingSerializer2
+### 2.6 Update BookingSerializer
 
 **Add review field**:
 

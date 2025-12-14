@@ -1,0 +1,41 @@
+/* YallaBus Admin Custom Colors - Brand: #042f40, Primary: #005687 */
+
+#header { background: #005687 !important; color: #fff !important; }
+#branding h1, #branding h1 a:link, #branding h1 a:visited { color: #fff !important; }
+#user-tools a { color: #e6f2f7 !important; }
+#user-tools a:hover { color: #fff !important; }
+
+.module h2, .module caption, .inline-group h2 { background: #005687 !important; color: #fff !important; }
+
+a:link, a:visited { color: #005687 !important; }
+a:hover, a:active { color: #004a73 !important; }
+
+.button, input[type=submit], input[type=button], .submit-row input, button { background: #005687 !important; color: #fff !important; border: none !important; }
+.button:hover, input[type=submit]:hover, input[type=button]:hover, .submit-row input:hover, button:hover { background: #004a73 !important; }
+.button.default, input[type=submit].default, .submit-row input.default { background: #004a73 !important; }
+
+.selected { background-color: #e6f2f7 !important; }
+.selector-chosen h2 { background: #005687 !important; color: #fff !important; }
+
+.calendarbox h2 { background: #005687 !important; color: #fff !important; }
+.calendar td a:hover, .timelist a:hover { background: #005687 !important; color: #fff !important; }
+.calendar td.selected a { background: #005687 !important; color: #fff !important; }
+
+div.breadcrumbs { background: #e6f2f7 !important; color: #004a73 !important; }
+div.breadcrumbs a { color: #005687 !important; }
+
+.paginator a:link, .paginator a:visited { background: #005687 !important; color: #fff !important; }
+.paginator a:hover { background: #004a73 !important; }
+
+.object-tools a:link, .object-tools a:visited { background: #005687 !important; color: #fff !important; }
+.object-tools a:hover { background: #004a73 !important; }
+
+#changelist-filter h2 { background: #005687 !important; color: #fff !important; }
+#changelist-filter li.selected a { color: #005687 !important; font-weight: bold; }
+
+#changelist table thead th.sorted { background: #e6f2f7 !important; }
+#changelist table thead th.sorted a { color: #004a73 !important; }
+
+#changelist table tbody tr:hover { background-color: #F0F7FA !important; }
+
+input:focus, textarea:focus, select:focus { border-color: #005687 !important; }
