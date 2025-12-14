@@ -38,10 +38,10 @@ else:
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-##58%te*9*nsa3k_^b*a-(@%qg16p7!3x$tbsnhfy#!m=un%33'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-##58%te*9*nsa3k_^b*a-(@%qg16p7!3x$tbsnhfy#!m=un%33')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DJANGO_DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['*']
 # ['localhost','127.0.0.1','mishwari.ye','driver.mishwari.ye','dolphin-striking-briefly.ngrok-free.app','172.29.240.1','0.0.0.0']
