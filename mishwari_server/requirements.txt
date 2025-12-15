@@ -19,3 +19,6 @@ django-unfold==0.71.0
 django-redis>=5.2.0
 redis>=4.0.0
 firebase-admin==6.5.0
+google-auth==2.27.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0

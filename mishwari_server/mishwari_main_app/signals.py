@@ -2,6 +2,8 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.db.models import Avg
 from .models import TripReview, Bus, Driver, BusOperator, Trip
+from .utils.google_indexing import notify_google_indexing
+import os
 
 @receiver(post_save, sender=TripReview)
 def update_ratings_on_review(sender, instance, created, **kwargs):
@@ -39,9 +41,21 @@ def update_ratings_on_review(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Trip)
-def update_health_score_on_trip_change(sender, instance, **kwargs):
-    """Recalculate health score when trip is cancelled"""
+def update_health_score_on_trip_change(sender, instance, created, **kwargs):
+    """Recalculate health score when trip is cancelled and notify Google for indexing"""
+    
+    # Auto-submit to Google when trip is published
+    if instance.status == 'published':
+        site_url = os.getenv('SITE_URL', 'https://yallabus.app')
+        trip_url = f'{site_url}/bus_list/{instance.id}'
+        notify_google_indexing(trip_url, 'URL_UPDATED')
+    
+    # Notify Google when trip is cancelled (remove from index)
     if instance.status == 'cancelled':
+        site_url = os.getenv('SITE_URL', 'https://yallabus.app')
+        trip_url = f'{site_url}/bus_list/{instance.id}'
+        notify_google_indexing(trip_url, 'URL_DELETED')
+        
         from .models import OperatorMetrics
         metrics, created = OperatorMetrics.objects.get_or_create(operator=instance.operator)
         

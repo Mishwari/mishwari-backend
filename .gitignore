@@ -4,6 +4,7 @@
 **/*.so
 **/*.egg
 **/*.egg-info/
+mishwari_server/yallabus-indexing-credentials.json
 
 # Virtual environments
 mishvenv/
