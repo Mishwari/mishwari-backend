@@ -515,6 +515,15 @@ class MobileLoginView(viewsets.ViewSet):
         if User.objects.filter(username=new_mobile).exclude(id=request.user.id).exists():
             return Response({'error': 'Mobile number already in use'}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Check if new mobile has pending invitation (warn but allow)
+        pending_invitation = DriverInvitation.objects.filter(
+            mobile_number=new_mobile,
+            status='pending',
+            expires_at__gt=timezone.now()
+        ).first()
+        if pending_invitation:
+            print(f'[MOBILE CHANGE] Warning: New mobile {new_mobile} has pending invitation from {pending_invitation.operator.name}')
+        
         # Update mobile number
         old_mobile = profile.mobile_number
         request.user.username = new_mobile
