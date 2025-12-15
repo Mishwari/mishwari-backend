@@ -228,9 +228,6 @@ class MobileLoginView(viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='verify-firebase-otp')
     def verify_firebase_otp(self, request):
         firebase_token = request.data.get('firebase_token')
-        app_type = request.data.get('app_type', 'passenger')  # 'passenger' or 'driver'
-        
-        print(f'[FIREBASE REQUEST] Received app_type={app_type}, firebase_token exists={bool(firebase_token)}')
         
         if not firebase_token:
             return Response({'error': 'Firebase token required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -246,6 +243,12 @@ class MobileLoginView(viewsets.ViewSet):
                 status='pending',
                 expires_at__gt=timezone.now()
             ).first()
+            
+            # Smart app_type detection: if pending invitation exists, default to driver
+            app_type = request.data.get('app_type')
+            if not app_type:
+                app_type = 'driver' if pending_invitation else 'passenger'
+            print(f'[FIREBASE] Detected app_type={app_type}, has_invitation={bool(pending_invitation)}')
             
             # Create or get user
             user, created = User.objects.get_or_create(
@@ -331,7 +334,6 @@ class MobileLoginView(viewsets.ViewSet):
         mobile_number = request.data.get('mobile_number')
         otp_code = request.data.get('otp_code')
         password = request.data.get('password')  # Optional password for operator_admin
-        app_type = request.data.get('app_type', 'passenger')  # 'passenger' or 'driver'
         
         # Get OTP from cache
         cached_otp = cache.get(f'otp_{mobile_number}')
@@ -347,6 +349,12 @@ class MobileLoginView(viewsets.ViewSet):
                 status='pending',
                 expires_at__gt=timezone.now()
             ).first()
+            
+            # Smart app_type detection: if pending invitation exists, default to driver
+            app_type = request.data.get('app_type')
+            if not app_type:
+                app_type = 'driver' if pending_invitation else 'passenger'
+            print(f'[SMS] Detected app_type={app_type}, has_invitation={bool(pending_invitation)}')
             
             # Create user with phone as username
             user, created = User.objects.get_or_create(
@@ -371,7 +379,7 @@ class MobileLoginView(viewsets.ViewSet):
             )
             
             # Validate app access based on role
-            print(f'[SMS] app_type={app_type}, role={profile.role}')
+            print(f'[SMS] app_type={app_type}, role={profile.role}, created={created}')
             if app_type == 'passenger' and profile.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
                 print(f'[SMS] BLOCKING driver in passenger app')
                 return Response({
