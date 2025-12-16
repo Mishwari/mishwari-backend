@@ -35,7 +35,7 @@ class Trip(models.Model):
     price_per_km = models.DecimalField(max_digits=6, decimal_places=2, default=50.00)
     total_distance_km = models.FloatField(default=0.0)
     seat_matrix = models.JSONField(default=dict)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     

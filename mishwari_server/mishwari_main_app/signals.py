@@ -4,6 +4,8 @@ from django.db.models import Avg
 from .models import TripReview, Bus, Driver, BusOperator, Trip
 from .utils.google_indexing import notify_google_indexing
 import os
+import urllib.request
+import urllib.error
 
 @receiver(post_save, sender=TripReview)
 def update_ratings_on_review(sender, instance, created, **kwargs):
@@ -49,6 +51,13 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
         site_url = os.getenv('SITE_URL', 'https://yallabus.app')
         trip_url = f'{site_url}/bus_list/{instance.id}'
         notify_google_indexing(trip_url, 'URL_UPDATED')
+        
+        # Ping Google about sitemap update
+        try:
+            urllib.request.urlopen(f'http://www.google.com/ping?sitemap={site_url}/sitemap.xml', timeout=2)
+            print(f'[SITEMAP] Pinged Google about sitemap update')
+        except (urllib.error.URLError, Exception) as e:
+            print(f'[SITEMAP] Failed to ping Google: {str(e)}')
     
     # Notify Google when trip is cancelled (remove from index)
     if instance.status == 'cancelled':
