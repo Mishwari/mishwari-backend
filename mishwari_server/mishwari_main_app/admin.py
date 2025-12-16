@@ -36,6 +36,31 @@ class TripAdmin(admin.ModelAdmin):
     list_per_page = 50
     readonly_fields = ['created_at']
     autocomplete_fields = ['from_city', 'to_city', 'operator', 'bus', 'driver']
+    actions = ['submit_to_google_index', 'remove_from_google_index']
+    
+    def submit_to_google_index(self, request, queryset):
+        from .utils.google_indexing import notify_google_indexing
+        import os
+        site_url = os.getenv('SITE_URL', 'https://yallabus.app')
+        success = 0
+        for trip in queryset:
+            trip_url = f'{site_url}/bus_list/{trip.id}'
+            if notify_google_indexing(trip_url, 'URL_UPDATED'):
+                success += 1
+        self.message_user(request, f"{success}/{queryset.count()} trips submitted to Google Index.")
+    submit_to_google_index.short_description = "Submit to Google Index"
+    
+    def remove_from_google_index(self, request, queryset):
+        from .utils.google_indexing import notify_google_indexing
+        import os
+        site_url = os.getenv('SITE_URL', 'https://yallabus.app')
+        success = 0
+        for trip in queryset:
+            trip_url = f'{site_url}/bus_list/{trip.id}'
+            if notify_google_indexing(trip_url, 'URL_DELETED'):
+                success += 1
+        self.message_user(request, f"{success}/{queryset.count()} trips removed from Google Index.")
+    remove_from_google_index.short_description = "Remove from Google Index"
 
 
 @admin.register(TripStop)

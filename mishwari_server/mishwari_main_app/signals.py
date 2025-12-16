@@ -1,4 +1,4 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.db.models import Avg
 from .models import TripReview, Bus, Driver, BusOperator, Trip
@@ -42,14 +42,28 @@ def update_ratings_on_review(sender, instance, created, **kwargs):
     metrics.recalculate_health_score()
 
 
+@receiver(pre_save, sender=Trip)
+def track_trip_status_change(sender, instance, **kwargs):
+    """Track previous status before save"""
+    if instance.pk:
+        try:
+            instance._previous_status = Trip.objects.get(pk=instance.pk).status
+        except Trip.DoesNotExist:
+            instance._previous_status = None
+    else:
+        instance._previous_status = None
+
+
 @receiver(post_save, sender=Trip)
 def update_health_score_on_trip_change(sender, instance, created, **kwargs):
     """Recalculate health score when trip is cancelled and notify Google for indexing"""
     
-    # Auto-submit to Google when trip is published
-    if instance.status == 'published':
-        site_url = os.getenv('SITE_URL', 'https://yallabus.app')
-        trip_url = f'{site_url}/bus_list/{instance.id}'
+    previous_status = getattr(instance, '_previous_status', None)
+    site_url = os.getenv('SITE_URL', 'https://yallabus.app')
+    trip_url = f'{site_url}/bus_list/{instance.id}'
+    
+    # Auto-submit to Google when trip status CHANGES to published
+    if instance.status == 'published' and previous_status != 'published':
         notify_google_indexing(trip_url, 'URL_UPDATED')
         
         # Ping Google about sitemap update
@@ -59,10 +73,8 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
         except (urllib.error.URLError, Exception) as e:
             print(f'[SITEMAP] Failed to ping Google: {str(e)}')
     
-    # Notify Google when trip is cancelled (remove from index)
-    if instance.status == 'cancelled':
-        site_url = os.getenv('SITE_URL', 'https://yallabus.app')
-        trip_url = f'{site_url}/bus_list/{instance.id}'
+    # Notify Google when trip status CHANGES to cancelled
+    if instance.status == 'cancelled' and previous_status != 'cancelled':
         notify_google_indexing(trip_url, 'URL_DELETED')
         
         from .models import OperatorMetrics

@@ -12,9 +12,14 @@ def notify_google_indexing(url, action='URL_UPDATED'):
     """
     # Skip if not in production or credentials not set
     service_account_file = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE')
-    if not service_account_file or not os.path.exists(service_account_file):
-        print(f'[INDEXING] Skipping Google indexing (no credentials): {url}')
+    if not service_account_file:
+        print(f'[INDEXING] GOOGLE_SERVICE_ACCOUNT_FILE not set in environment')
         return False
+    if not os.path.exists(service_account_file):
+        print(f'[INDEXING] Credentials file not found: {service_account_file}')
+        return False
+    
+    print(f'[INDEXING] Attempting to index: {url} (action: {action})')
     
     try:
         SCOPES = ['https://www.googleapis.com/auth/indexing']
@@ -36,10 +41,12 @@ def notify_google_indexing(url, action='URL_UPDATED'):
         response = requests.post(endpoint, headers=headers, json=payload)
         
         if response.status_code == 200:
-            print(f'[INDEXING] Successfully notified Google: {url}')
+            result = response.json()
+            print(f'[INDEXING] ✓ Success: {url}')
+            print(f'[INDEXING] Response: {result}')
             return True
         else:
-            print(f'[INDEXING] Failed to notify Google: {response.status_code} - {response.text}')
+            print(f'[INDEXING] ✗ Failed ({response.status_code}): {response.text}')
             return False
             
     except Exception as e:
