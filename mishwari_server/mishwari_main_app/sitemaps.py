@@ -9,6 +9,9 @@ class TripSitemap(Sitemap):
     priority = 0.9
     protocol = 'https'
     
+    def get_domain(self):
+        return 'yallabus.app'
+    
     def items(self):
         # Return all trips for testing, filter by published status in production
         return Trip.objects.select_related('from_city', 'to_city', 'operator').order_by('-created_at')[:100]
@@ -24,6 +27,9 @@ class CitySitemap(Sitemap):
     changefreq = "weekly"
     priority = 0.7
     protocol = 'https'
+    
+    def get_domain(self):
+        return 'yallabus.app'
     
     def items(self):
         return CityList.objects.all().order_by('city')[:100]
