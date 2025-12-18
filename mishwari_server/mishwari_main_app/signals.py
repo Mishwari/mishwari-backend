@@ -1,11 +1,15 @@
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.db.models import Avg
+from django.db import transaction
 from .models import TripReview, Bus, Driver, BusOperator, Trip
 from .utils.google_indexing import notify_google_indexing
 import os
 import urllib.request
 import urllib.error
+import logging
+
+logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender=TripReview)
 def update_ratings_on_review(sender, instance, created, **kwargs):
@@ -42,16 +46,7 @@ def update_ratings_on_review(sender, instance, created, **kwargs):
     metrics.recalculate_health_score()
 
 
-@receiver(pre_save, sender=Trip)
-def track_trip_status_change(sender, instance, **kwargs):
-    """Track previous status before save"""
-    if instance.pk:
-        try:
-            instance._previous_status = Trip.objects.get(pk=instance.pk).status
-        except Trip.DoesNotExist:
-            instance._previous_status = None
-    else:
-        instance._previous_status = None
+
 
 
 @receiver(post_save, sender=Trip)
@@ -62,24 +57,25 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
     site_url = os.getenv('SITE_URL', 'https://yallabus.app')
     trip_url = f'{site_url}/bus_list/{instance.id}'
     
-    print(f'[SIGNAL] Trip {instance.id} saved: status={instance.status}, previous={previous_status}, created={created}')
+    logger.info(f'[SIGNAL] Trip {instance.id} saved: status={instance.status}, previous={previous_status}, created={created}')
     
-    # Auto-submit to Google when trip becomes published:
-    # Triggers when previous_status != 'published' (includes None for new trips)
+    # Auto-submit to Google when trip becomes published
     if instance.status == 'published' and previous_status != 'published':
-        print(f'[INDEXING] Trip {instance.id} is published (created={created}, previous={previous_status})')
-        notify_google_indexing(trip_url, 'URL_UPDATED')
+        logger.info(f'[INDEXING] Trip {instance.id} is published (created={created}, previous={previous_status})')
+        transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_UPDATED'))
         
-        # Ping Google about sitemap update
-        try:
-            urllib.request.urlopen(f'http://www.google.com/ping?sitemap={site_url}/sitemap.xml', timeout=2)
-            print(f'[SITEMAP] Pinged Google about sitemap update')
-        except (urllib.error.URLError, Exception) as e:
-            print(f'[SITEMAP] Failed to ping Google: {str(e)}')
+        def ping_sitemap():
+            try:
+                urllib.request.urlopen(f'http://www.google.com/ping?sitemap={site_url}/sitemap.xml', timeout=2)
+                logger.info('[SITEMAP] Pinged Google about sitemap update')
+            except (urllib.error.URLError, Exception) as e:
+                logger.warning(f'[SITEMAP] Failed to ping Google: {str(e)}')
+        
+        transaction.on_commit(ping_sitemap)
     
     # Notify Google when trip status CHANGES to cancelled
     if instance.status == 'cancelled' and previous_status != 'cancelled':
-        notify_google_indexing(trip_url, 'URL_DELETED')
+        transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_DELETED'))
         
         from .models import OperatorMetrics
         metrics, created = OperatorMetrics.objects.get_or_create(operator=instance.operator)

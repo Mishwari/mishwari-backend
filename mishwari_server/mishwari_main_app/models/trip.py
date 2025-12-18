@@ -39,6 +39,10 @@ class Trip(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._previous_status = self.status
+    
     class Meta:
         indexes = [
             models.Index(fields=['from_city', 'to_city', 'journey_date']),
