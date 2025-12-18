@@ -455,7 +455,7 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
             if auto_publish and trip.can_publish():
                 trip.status = 'published'
                 trip.full_clean()
-                trip.save()
+                trip.save(update_fields=['status'])
             
             clear_route_session(session_id)
             

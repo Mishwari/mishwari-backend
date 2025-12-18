@@ -62,6 +62,8 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
     site_url = os.getenv('SITE_URL', 'https://yallabus.app')
     trip_url = f'{site_url}/bus_list/{instance.id}'
     
+    print(f'[SIGNAL] Trip {instance.id} saved: status={instance.status}, previous={previous_status}, created={created}')
+    
     # Auto-submit to Google when trip becomes published:
     # Triggers when previous_status != 'published' (includes None for new trips)
     if instance.status == 'published' and previous_status != 'published':
