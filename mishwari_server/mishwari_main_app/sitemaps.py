@@ -15,8 +15,10 @@ class TripSitemap(Sitemap):
         return super().get_urls(page=page, site=site, protocol='https')
     
     def items(self):
+        today = timezone.now().date()
         return Trip.objects.filter(
-            status='published'
+            status='published',
+            journey_date__gte=today
         ).select_related('from_city', 'to_city', 'operator').order_by('-created_at')[:1000]
     
     def lastmod(self, obj):
