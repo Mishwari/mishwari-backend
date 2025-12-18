@@ -450,14 +450,14 @@ class OperatorTripViewSet(viewsets.ModelViewSet):
                 custom_prices=request.data.get('custom_prices', {})
             )
             
-            # Auto-publish if requested and golden rule is satisfied
+            clear_route_session(session_id)
+            
+            # Auto-publish AFTER transaction commits to ensure signal fires
             auto_publish = request.data.get('auto_publish', False)
             if auto_publish and trip.can_publish():
                 trip.status = 'published'
                 trip.full_clean()
-                trip.save(update_fields=['status'])
-            
-            clear_route_session(session_id)
+                trip.save()
             
             serializer = self.get_serializer(trip)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
