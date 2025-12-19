@@ -1,12 +1,10 @@
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.db.models import Avg
 from django.db import transaction
 from .models import TripReview, Bus, Driver, BusOperator, Trip
 from .utils.google_indexing import notify_google_indexing
 import os
-import urllib.request
-import urllib.error
 import logging
 
 logger = logging.getLogger(__name__)
@@ -63,15 +61,6 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
     if instance.status == 'published' and previous_status != 'published':
         logger.info(f'[INDEXING] Trip {instance.id} is published (created={created}, previous={previous_status})')
         transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_UPDATED'))
-        
-        def ping_sitemap():
-            try:
-                urllib.request.urlopen(f'http://www.google.com/ping?sitemap={site_url}/sitemap.xml', timeout=2)
-                logger.info('[SITEMAP] Pinged Google about sitemap update')
-            except (urllib.error.URLError, Exception) as e:
-                logger.warning(f'[SITEMAP] Failed to ping Google: {str(e)}')
-        
-        transaction.on_commit(ping_sitemap)
     
     # Notify Google when trip status CHANGES to cancelled
     if instance.status == 'cancelled' and previous_status != 'cancelled':
