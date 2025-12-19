@@ -60,7 +60,7 @@ CSRF_TRUSTED_ORIGINS = [
 
 INSTALLED_APPS = [
     # apps - must be before admin to override templates
-    'mishwari_main_app',
+    'mishwari_main_app.apps.MishwariMainAppConfig',
     'wallet',
     
     # 'unfold',
