@@ -52,6 +52,14 @@ class Trip(models.Model):
     def __str__(self):
         return f"{self.from_city} → {self.to_city} ({self.journey_date})"
     
+    def save(self, *args, **kwargs):
+        import sys
+        sys.stdout.write(f"[TRIP.SAVE] Trip {self.id} - status={self.status}, _previous={getattr(self, '_previous_status', None)}\n")
+        sys.stdout.flush()
+        super().save(*args, **kwargs)
+        # Update _previous_status after save
+        self._previous_status = self.status
+    
     def clean(self):
         if self.status == 'published':
             if not self.operator.is_verified:

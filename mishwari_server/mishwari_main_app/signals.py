@@ -6,7 +6,10 @@ from .models import TripReview, Bus, Driver, BusOperator, Trip
 from .utils.google_indexing import notify_google_indexing
 import os
 import logging
+import sys
 
+sys.stdout.write('!!!! SIGNALS FILE LOADED !!!!\n')
+sys.stdout.flush()
 logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender=TripReview)
@@ -55,7 +58,8 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
     site_url = os.getenv('SITE_URL', 'https://yallabus.app')
     trip_url = f'{site_url}/bus_list/{instance.id}'
     
-    print(f'[SIGNAL] Trip {instance.id} saved: status={instance.status}, previous={previous_status}, created={created}')
+    sys.stdout.write(f'[SIGNAL] Trip {instance.id} saved: status={instance.status}, previous={previous_status}, created={created}\n')
+    sys.stdout.flush()
     logger.info(f'[SIGNAL] Trip {instance.id} saved: status={instance.status}, previous={previous_status}, created={created}')
     
     # CASE 1: Transition from Draft -> Published
@@ -64,13 +68,15 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
     is_created_published = (instance.status == 'published' and created)
     
     if is_becoming_published or is_created_published:
-        print(f'[INDEXING] Trip {instance.id} needs indexing (becoming={is_becoming_published}, created={is_created_published})')
+        sys.stdout.write(f'[INDEXING] Trip {instance.id} needs indexing (becoming={is_becoming_published}, created={is_created_published})\n')
+        sys.stdout.flush()
         logger.info(f'[INDEXING] Trip {instance.id} needs indexing (becoming={is_becoming_published}, created={is_created_published})')
         transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_UPDATED'))
     
     # Notify Google when trip status CHANGES to cancelled
     if instance.status == 'cancelled' and previous_status != 'cancelled':
-        print(f'[INDEXING] Trip {instance.id} cancelled, notifying Google')
+        sys.stdout.write(f'[INDEXING] Trip {instance.id} cancelled, notifying Google\n')
+        sys.stdout.flush()
         transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_DELETED'))
         
         from .models import OperatorMetrics
