@@ -57,9 +57,13 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
     
     logger.info(f'[SIGNAL] Trip {instance.id} saved: status={instance.status}, previous={previous_status}, created={created}')
     
-    # Auto-submit to Google when trip becomes published
-    if instance.status == 'published' and previous_status != 'published':
-        logger.info(f'[INDEXING] Trip {instance.id} is published (created={created}, previous={previous_status})')
+    # CASE 1: Transition from Draft -> Published
+    # CASE 2: Created as Published (common in automated wizards)
+    is_becoming_published = (instance.status == 'published' and previous_status != 'published')
+    is_created_published = (instance.status == 'published' and created)
+    
+    if is_becoming_published or is_created_published:
+        logger.info(f'[INDEXING] Trip {instance.id} needs indexing (becoming={is_becoming_published}, created={is_created_published})')
         transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_UPDATED'))
     
     # Notify Google when trip status CHANGES to cancelled
