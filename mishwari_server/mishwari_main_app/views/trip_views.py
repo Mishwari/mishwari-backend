@@ -44,6 +44,39 @@ class TripSearchView(viewsets.ViewSet):
     permission_classes = [AllowAny]
     authentication_classes = []
     
+    @action(detail=False, methods=['get'], url_path='recent')
+    def recent_trips(self, request):
+        """Get recently created published trips for homepage"""
+        from django.utils import timezone
+        
+        today = timezone.now().date()
+        trips = Trip.objects.filter(
+            status='published',
+            journey_date__gte=today
+        ).select_related('from_city', 'to_city', 'operator', 'bus', 'driver').order_by('-created_at')[:8]
+        
+        results = []
+        for trip in trips:
+            first_stop = trip.stops.order_by('sequence').first()
+            last_stop = trip.stops.order_by('-sequence').first()
+            
+            # Calculate price from first to last stop
+            price = last_stop.price_from_start if last_stop else 0
+            
+            results.append({
+                'id': trip.id,
+                'from_city': {'name': trip.from_city.city},
+                'to_city': {'name': trip.to_city.city},
+                'journey_date': trip.journey_date,
+                'departure_time': first_stop.planned_departure if first_stop else trip.planned_departure,
+                'price': price,
+                'available_seats': trip.get_min_available_seats(),
+                'operator': {'name': trip.operator.name},
+                'planned_route_name': trip.planned_route_name
+            })
+        
+        return Response(results, status=status.HTTP_200_OK)
+    
     def list(self, request):
         from_city = request.query_params.get('pickup') or request.query_params.get('from_city')
         to_city = request.query_params.get('destination') or request.query_params.get('to_city')
