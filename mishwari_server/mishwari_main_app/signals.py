@@ -4,6 +4,7 @@ from django.db.models import Avg
 from django.db import transaction
 from .models import TripReview, Bus, Driver, BusOperator, Trip
 from .utils.google_indexing import notify_google_indexing
+from .utils.indexnow import notify_indexnow
 import os
 import logging
 import sys
@@ -75,6 +76,9 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
         
         # Notify Google about the specific trip URL
         transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_UPDATED'))
+        
+        # Notify Bing/Yandex via IndexNow
+        transaction.on_commit(lambda: notify_indexnow([trip_url]))
         
         # Ping Google about the feed update
         def ping_feed():
