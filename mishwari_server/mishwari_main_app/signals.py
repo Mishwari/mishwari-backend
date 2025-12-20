@@ -7,6 +7,7 @@ from .utils.google_indexing import notify_google_indexing
 import os
 import logging
 import sys
+import requests
 
 sys.stdout.write('!!!! SIGNALS FILE LOADED !!!!\n')
 sys.stdout.flush()
@@ -71,7 +72,23 @@ def update_health_score_on_trip_change(sender, instance, created, **kwargs):
         sys.stdout.write(f'[INDEXING] Trip {instance.id} needs indexing (becoming={is_becoming_published}, created={is_created_published})\n')
         sys.stdout.flush()
         logger.info(f'[INDEXING] Trip {instance.id} needs indexing (becoming={is_becoming_published}, created={is_created_published})')
+        
+        # Notify Google about the specific trip URL
         transaction.on_commit(lambda: notify_google_indexing(trip_url, 'URL_UPDATED'))
+        
+        # Ping Google about the feed update
+        def ping_feed():
+            site_url = os.getenv('SITE_URL', 'https://yallabus.app')
+            feed_url = f"{site_url}/feeds/latest-trips/"
+            try:
+                requests.get(f"https://www.google.com/ping?sitemap={feed_url}", timeout=5)
+                sys.stdout.write(f'[FEED] Pinged Google about feed update\n')
+                sys.stdout.flush()
+            except Exception as e:
+                sys.stdout.write(f'[FEED] Failed to ping Google: {e}\n')
+                sys.stdout.flush()
+        
+        transaction.on_commit(ping_feed)
     
     # Notify Google when trip status CHANGES to cancelled
     if instance.status == 'cancelled' and previous_status != 'cancelled':

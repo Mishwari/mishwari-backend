@@ -8,6 +8,7 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 from mishwari_main_app.sitemaps import TripSitemap, CitySitemap
+from mishwari_main_app.feeds import LatestTripsFeed
 
 sitemaps = {
     'trips': TripSitemap,
@@ -21,4 +22,5 @@ urlpatterns = [
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('sitemap.xml', sitemap, {'sitemaps': sitemaps}, name='django.contrib.sitemaps.views.sitemap'),
+    path('feeds/latest-trips/', LatestTripsFeed(), name='latest_trips_feed'),
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
