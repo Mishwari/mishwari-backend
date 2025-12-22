@@ -81,43 +81,91 @@ class TripSearchView(viewsets.ViewSet):
         from_city = request.query_params.get('pickup') or request.query_params.get('from_city') or request.query_params.get('from')
         to_city = request.query_params.get('destination') or request.query_params.get('to_city') or request.query_params.get('to')
         date_str = request.query_params.get('date', None)
+        user_lat = request.query_params.get('user_lat', None)  # NEW: User GPS latitude
+        user_lon = request.query_params.get('user_lon', None)  # NEW: User GPS longitude
 
-        # SEO-friendly: If only from_city provided, show all future trips from that city
-        if from_city and not to_city and not date_str:
+        # CASE 2: User has GPS + searching for destination - Find nearest city and show trips FROM there TO destination
+        # CHECK THIS FIRST before CASE 1!
+        if to_city and user_lat and user_lon and not from_city and not date_str:
             from django.utils import timezone
-            try:
-                from_city_obj = CityList.objects.get(city=from_city)
-            except CityList.DoesNotExist:
-                return Response({'error': 'Invalid city'}, status=status.HTTP_400_BAD_REQUEST)
+            from geopy.distance import geodesic
             
+            try:
+                to_city_obj = CityList.objects.get(city=to_city)
+                user_lat_f = float(user_lat)
+                user_lon_f = float(user_lon)
+            except (CityList.DoesNotExist, ValueError):
+                return Response({'error': 'Invalid parameters'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Find nearest city to user using geodesic distance
+            all_cities = CityList.objects.all()
+            
+            nearest_city = None
+            min_distance = float('inf')
+            
+            for city in all_cities:
+                if not city.latitude or not city.longitude:
+                    continue
+                    
+                distance_km = geodesic((user_lat_f, user_lon_f), (city.latitude, city.longitude)).kilometers
+                
+                if distance_km < min_distance:
+                    min_distance = distance_km
+                    nearest_city = city
+            
+            print(f"DEBUG: Nearest city found: {nearest_city.city if nearest_city else 'None'}, Distance: {min_distance}km")
+            
+            if not nearest_city:
+                # Fallback to showing all trips to destination
+                return self.list(request._request if hasattr(request, '_request') else request)
+            
+            # Now search for trips FROM nearest_city TO to_city
             today = timezone.now().date()
-            # Only get trips where from_city is the FIRST stop (sequence=0)
-            trips_from_city = TripStop.objects.filter(
-                city=from_city_obj,
-                sequence=0,  # First stop only
+            
+            trips_with_from = TripStop.objects.filter(
+                city=nearest_city,
                 trip__journey_date__gte=today,
                 trip__status='published'
-            ).select_related('trip', 'trip__operator', 'trip__bus', 'trip__driver').order_by('trip__journey_date', 'planned_departure')[:20]
+            ).values_list('trip_id', flat=True)
+            
+            trips_with_to = TripStop.objects.filter(
+                city=to_city_obj,
+                trip__journey_date__gte=today,
+                trip__status='published'
+            ).values_list('trip_id', flat=True)
+            
+            matching_trip_ids = set(trips_with_from) & set(trips_with_to)
             
             results = []
-            for stop in trips_from_city:
-                trip = stop.trip
-                last_stop = trip.stops.order_by('-sequence').first()
+            for trip_id in matching_trip_ids:
+                trip = Trip.objects.select_related('bus', 'driver', 'operator').get(id=trip_id)
                 
-                # Get destination (last stop)
-                to_city_name = last_stop.city.city if last_stop else 'Unknown'
+                from_stop = trip.stops.filter(city=nearest_city).first()
+                to_stop = trip.stops.filter(city=to_city_obj).first()
+                
+                print(f"DEBUG Trip {trip_id}: from_stop city={from_stop.city.city if from_stop else 'None'}, to_stop city={to_stop.city.city if to_stop else 'None'}")
+                
+                if not from_stop or not to_stop or from_stop.sequence >= to_stop.sequence:
+                    continue
+                
+                segments = [f"{i}-{i+1}" for i in range(from_stop.sequence, to_stop.sequence)]
+                available_seats = min([trip.seat_matrix.get(seg, 0) for seg in segments]) if segments else 0
+                fare = to_stop.price_from_start - from_stop.price_from_start
                 
                 results.append({
                     'id': trip.id,
                     'trip_id': trip.id,
-                    'from_city': from_city,
-                    'to_city': to_city_name,
+                    'from_stop_id': from_stop.id,
+                    'to_stop_id': to_stop.id,
+                    'from_city': nearest_city.city,
+                    'to_city': to_city,
                     'journey_date': trip.journey_date,
-                    'departure_time': stop.planned_departure,
-                    'arrival_time': last_stop.planned_arrival if last_stop else None,
-                    'available_seats': trip.get_min_available_seats(),
-                    'fare': last_stop.price_from_start if last_stop else 0,
-                    'price': last_stop.price_from_start if last_stop else 0,
+                    'departure_time': from_stop.planned_departure,
+                    'arrival_time': to_stop.planned_arrival,
+                    'available_seats': available_seats,
+                    'fare': fare,
+                    'price': fare,
+                    'user_distance_km': round(min_distance, 1),  # NEW: Show distance to pickup
                     'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'has_wifi': trip.bus.has_wifi, 'has_ac': trip.bus.has_ac, 'has_usb_charging': trip.bus.has_usb_charging} if trip.bus else None,
                     'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
                     'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
@@ -126,9 +174,57 @@ class TripSearchView(viewsets.ViewSet):
                     'planned_route_name': trip.planned_route_name
                 })
             
+            if len(results) >= 50:
+                return Response(results[:50], status=status.HTTP_200_OK)
+            
+            # FALLBACK STEP 2: If no results from nearest city, show ANY trips to destination
+            if not results:
+                # Get trips where to_city is ANY stop (not first stop)
+                trips_via_city = TripStop.objects.filter(
+                    city=to_city_obj,
+                    trip__journey_date__gte=today,
+                    trip__status='published'
+                ).exclude(
+                    sequence=0
+                ).select_related('trip', 'trip__operator', 'trip__bus', 'trip__driver').order_by('trip__journey_date')[:100]
+                
+                for stop in trips_via_city:
+                    trip = stop.trip
+                    first_stop = trip.stops.order_by('sequence').first()
+                    
+                    if not first_stop:
+                        continue
+                    
+                    segments = [f"{i}-{i+1}" for i in range(0, stop.sequence)]
+                    available_seats = min([trip.seat_matrix.get(seg, 0) for seg in segments]) if segments else trip.get_min_available_seats()
+                    
+                    results.append({
+                        'id': trip.id,
+                        'trip_id': trip.id,
+                        'from_stop_id': first_stop.id,
+                        'to_stop_id': stop.id,
+                        'from_city': first_stop.city.city,
+                        'to_city': to_city,
+                        'journey_date': trip.journey_date,
+                        'departure_time': first_stop.planned_departure,
+                        'arrival_time': stop.planned_arrival,
+                        'available_seats': available_seats,
+                        'fare': stop.price_from_start,
+                        'price': stop.price_from_start,
+                        'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'has_wifi': trip.bus.has_wifi, 'has_ac': trip.bus.has_ac, 'has_usb_charging': trip.bus.has_usb_charging} if trip.bus else None,
+                        'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
+                        'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
+                        'trip_type': trip.trip_type,
+                        'status': trip.status,
+                        'planned_route_name': trip.planned_route_name
+                    })
+                    
+                    if len(results) >= 50:
+                        break
+            
             return Response(results, status=status.HTTP_200_OK)
         
-        # SEO-friendly: If only to_city provided, show all future trips to that city
+        # CASE 1: Single city search (SEO/Google) - Show trips TO that city (ANY stop, not just final)
         if to_city and not from_city and not date_str:
             from django.utils import timezone
             try:
@@ -137,34 +233,40 @@ class TripSearchView(viewsets.ViewSet):
                 return Response({'error': 'Invalid city'}, status=status.HTTP_400_BAD_REQUEST)
             
             today = timezone.now().date()
-            # Only get trips where to_city is the LAST stop
-            trips_to_city = Trip.objects.filter(
-                journey_date__gte=today,
-                status='published'
-            ).select_related('operator', 'bus', 'driver').prefetch_related('stops')[:100]
+            
+            # Get trips where to_city is ANY stop (not first stop)
+            trips_via_city = TripStop.objects.filter(
+                city=to_city_obj,
+                trip__journey_date__gte=today,
+                trip__status='published'
+            ).exclude(
+                sequence=0
+            ).select_related('trip', 'trip__operator', 'trip__bus', 'trip__driver').order_by('trip__journey_date')[:100]
             
             results = []
-            for trip in trips_to_city:
-                last_stop = trip.stops.order_by('-sequence').first()
+            for stop in trips_via_city:
+                trip = stop.trip
+                first_stop = trip.stops.order_by('sequence').first()
                 
-                # Only include if to_city is the last stop
-                if not last_stop or last_stop.city_id != to_city_obj.id:
+                if not first_stop:
                     continue
                 
-                first_stop = trip.stops.order_by('sequence').first()
-                from_city_name = first_stop.city.city if first_stop else 'Unknown'
+                segments = [f"{i}-{i+1}" for i in range(0, stop.sequence)]
+                available_seats = min([trip.seat_matrix.get(seg, 0) for seg in segments]) if segments else trip.get_min_available_seats()
                 
                 results.append({
                     'id': trip.id,
                     'trip_id': trip.id,
-                    'from_city': from_city_name,
+                    'from_stop_id': first_stop.id,
+                    'to_stop_id': stop.id,
+                    'from_city': first_stop.city.city,
                     'to_city': to_city,
                     'journey_date': trip.journey_date,
-                    'departure_time': first_stop.planned_departure if first_stop else None,
-                    'arrival_time': last_stop.planned_arrival,
-                    'available_seats': trip.get_min_available_seats(),
-                    'fare': last_stop.price_from_start,
-                    'price': last_stop.price_from_start,
+                    'departure_time': first_stop.planned_departure,
+                    'arrival_time': stop.planned_arrival,
+                    'available_seats': available_seats,
+                    'fare': stop.price_from_start,
+                    'price': stop.price_from_start,
                     'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'has_wifi': trip.bus.has_wifi, 'has_ac': trip.bus.has_ac, 'has_usb_charging': trip.bus.has_usb_charging} if trip.bus else None,
                     'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
                     'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
@@ -173,70 +275,138 @@ class TripSearchView(viewsets.ViewSet):
                     'planned_route_name': trip.planned_route_name
                 })
                 
-                if len(results) >= 20:
+                if len(results) >= 50:
                     break
             
             return Response(results, status=status.HTTP_200_OK)
-
-        if not all([from_city, to_city, date_str]):
-            return Response({'error': 'from_city, to_city, and date required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        try:
-            filter_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            from_city_obj = CityList.objects.get(city=from_city)
-            to_city_obj = CityList.objects.get(city=to_city)
-        except (ValueError, CityList.DoesNotExist):
-            return Response({'error': 'Invalid date or city'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        trips_with_from = TripStop.objects.filter(
-            city=from_city_obj,
-            trip__journey_date=filter_date,
-            trip__status='published'
-        ).values_list('trip_id', flat=True)
-        
-        trips_with_to = TripStop.objects.filter(
-            city=to_city_obj,
-            trip__journey_date=filter_date,
-            trip__status='published'
-        ).values_list('trip_id', flat=True)
-        
-        matching_trip_ids = set(trips_with_from) & set(trips_with_to)
-        
-        results = []
-        for trip_id in matching_trip_ids:
-            trip = Trip.objects.select_related('bus', 'driver').get(id=trip_id)
+        # CASE 1.5: Single FROM city search - Show trips FROM that city (ANY stop, not just first)
+        if from_city and not to_city and not date_str:
+            from django.utils import timezone
+            try:
+                from_city_obj = CityList.objects.get(city=from_city)
+            except CityList.DoesNotExist:
+                return Response({'error': 'Invalid city'}, status=status.HTTP_400_BAD_REQUEST)
             
-            from_stop = trip.stops.filter(city=from_city_obj).first()
-            to_stop = trip.stops.filter(city=to_city_obj).first()
+            today = timezone.now().date()
             
-            if not from_stop or not to_stop or from_stop.sequence >= to_stop.sequence:
-                continue
+            # Get trips where from_city is ANY stop (not last stop)
+            trips_via_city = TripStop.objects.filter(
+                city=from_city_obj,
+                trip__journey_date__gte=today,
+                trip__status='published'
+            ).select_related('trip', 'trip__operator', 'trip__bus', 'trip__driver').order_by('trip__journey_date')[:100]
             
-            segments = [f"{i}-{i+1}" for i in range(from_stop.sequence, to_stop.sequence)]
-            available_seats = min([trip.seat_matrix.get(seg, 0) for seg in segments]) if segments else 0
-            fare = to_stop.price_from_start - from_stop.price_from_start
+            results = []
+            for stop in trips_via_city:
+                trip = stop.trip
+                last_stop = trip.stops.order_by('-sequence').first()
+                
+                # Skip if from_city is the last stop
+                if not last_stop or stop.sequence >= last_stop.sequence:
+                    continue
+                
+                segments = [f"{i}-{i+1}" for i in range(stop.sequence, last_stop.sequence)]
+                available_seats = min([trip.seat_matrix.get(seg, 0) for seg in segments]) if segments else trip.get_min_available_seats()
+                fare = last_stop.price_from_start - stop.price_from_start
+                
+                results.append({
+                    'id': trip.id,
+                    'trip_id': trip.id,
+                    'from_stop_id': stop.id,
+                    'to_stop_id': last_stop.id,
+                    'from_city': from_city,
+                    'to_city': last_stop.city.city,
+                    'journey_date': trip.journey_date,
+                    'departure_time': stop.planned_departure,
+                    'arrival_time': last_stop.planned_arrival,
+                    'available_seats': available_seats,
+                    'fare': fare,
+                    'price': fare,
+                    'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'has_wifi': trip.bus.has_wifi, 'has_ac': trip.bus.has_ac, 'has_usb_charging': trip.bus.has_usb_charging} if trip.bus else None,
+                    'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
+                    'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
+                    'trip_type': trip.trip_type,
+                    'status': trip.status,
+                    'planned_route_name': trip.planned_route_name
+                })
+                
+                if len(results) >= 50:
+                    break
             
-            results.append({
-                'id': trip.id,
-                'trip_id': trip.id,
-                'from_stop_id': from_stop.id,
-                'to_stop_id': to_stop.id,
-                'from_city': from_city,
-                'to_city': to_city,
-                'departure_time': from_stop.planned_departure,
-                'arrival_time': to_stop.planned_arrival,
-                'available_seats': available_seats,
-                'fare': fare,
-                'price': fare,
-                'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'has_wifi': trip.bus.has_wifi, 'has_ac': trip.bus.has_ac, 'has_usb_charging': trip.bus.has_usb_charging} if trip.bus else None,
-                'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
-                'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
-                'trip_type': trip.trip_type,
-                'status': trip.status,
-                'planned_route_name': trip.planned_route_name
-            })
+            return Response(results, status=status.HTTP_200_OK)
         
-        return Response(results, status=status.HTTP_200_OK)
+        # CASE 3: Full route search (with or without date)
+        if from_city and to_city:
+            from django.utils import timezone
+            
+            try:
+                from_city_obj = CityList.objects.get(city=from_city)
+                to_city_obj = CityList.objects.get(city=to_city)
+                filter_date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else None
+            except (ValueError, CityList.DoesNotExist):
+                return Response({'error': 'Invalid date or city'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            today = timezone.now().date()
+            
+            # Build query filters
+            trip_filters = {'trip__status': 'published'}
+            if filter_date:
+                trip_filters['trip__journey_date'] = filter_date
+            else:
+                trip_filters['trip__journey_date__gte'] = today
+            
+            trips_with_from = TripStop.objects.filter(
+                city=from_city_obj,
+                **trip_filters
+            ).values_list('trip_id', flat=True)
+            
+            trips_with_to = TripStop.objects.filter(
+                city=to_city_obj,
+                **trip_filters
+            ).values_list('trip_id', flat=True)
+            
+            matching_trip_ids = set(trips_with_from) & set(trips_with_to)
+            
+            results = []
+            for trip_id in matching_trip_ids:
+                trip = Trip.objects.select_related('bus', 'driver', 'operator').get(id=trip_id)
+                
+                from_stop = trip.stops.filter(city=from_city_obj).first()
+                to_stop = trip.stops.filter(city=to_city_obj).first()
+                
+                if not from_stop or not to_stop or from_stop.sequence >= to_stop.sequence:
+                    continue
+                
+                segments = [f"{i}-{i+1}" for i in range(from_stop.sequence, to_stop.sequence)]
+                available_seats = min([trip.seat_matrix.get(seg, 0) for seg in segments]) if segments else 0
+                fare = to_stop.price_from_start - from_stop.price_from_start
+                
+                results.append({
+                    'id': trip.id,
+                    'trip_id': trip.id,
+                    'from_stop_id': from_stop.id,
+                    'to_stop_id': to_stop.id,
+                    'from_city': from_city,
+                    'to_city': to_city,
+                    'journey_date': trip.journey_date,
+                    'departure_time': from_stop.planned_departure,
+                    'arrival_time': to_stop.planned_arrival,
+                    'available_seats': available_seats,
+                    'fare': fare,
+                    'price': fare,
+                    'bus': {'id': trip.bus.id, 'bus_number': trip.bus.bus_number, 'bus_type': trip.bus.bus_type, 'capacity': trip.bus.capacity, 'has_wifi': trip.bus.has_wifi, 'has_ac': trip.bus.has_ac, 'has_usb_charging': trip.bus.has_usb_charging} if trip.bus else None,
+                    'driver': {'id': trip.driver.id, 'd_name': trip.driver.profile.full_name, 'driver_rating': float(trip.driver.driver_rating), 'operator': {'id': trip.driver.operator.id, 'name': trip.driver.operator.name}} if trip.driver else None,
+                    'operator': {'id': trip.operator.id, 'name': trip.operator.name, 'avg_rating': float(trip.operator.avg_rating), 'total_reviews': trip.operator.total_reviews},
+                    'trip_type': trip.trip_type,
+                    'status': trip.status,
+                    'planned_route_name': trip.planned_route_name
+                })
+            
+            return Response(results, status=status.HTTP_200_OK)
+        
+        # CASE 4: Missing required parameters
+        return Response({'error': 'Invalid search parameters'}, status=status.HTTP_400_BAD_REQUEST)
     
     def retrieve(self, request, pk=None):
         trip = get_object_or_404(Trip.objects.filter(status='published'), pk=pk)
