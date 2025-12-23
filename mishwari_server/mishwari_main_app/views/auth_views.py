@@ -28,7 +28,7 @@ from django.core.cache import cache
 from ..models import Profile, BusOperator, Driver, OTPAttempt, DriverInvitation
 from datetime import timedelta
 from twilio.rest import Client
-from ..utils.firebase_auth import verify_firebase_token 
+from ..services.google_identity_proxy import GoogleIdentityProxyService 
 
 
 
@@ -43,26 +43,18 @@ class MobileLoginView(viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='request-otp')
     def request_otp(self, request):
         mobile_number = request.data.get('mobile_number')
+        recaptcha_token = request.data.get('recaptcha_token')
+        use_firebase = request.data.get('use_firebase', True)
         
         # Check rate limiting with OTPAttempt
         attempt, _ = OTPAttempt.objects.get_or_create(mobile_number=mobile_number)
         if attempt.blocked_until and timezone.now() < attempt.blocked_until:
             return Response({'error': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         
-        if attempt.attempt_count >= 3:
+        if attempt.attempt_count >= 50:
             attempt.blocked_until = timezone.now() + timedelta(minutes=30)
             attempt.save()
             return Response({'error': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-        
-        otp_code = get_random_string(length=6, allowed_chars='0123456789')
-        
-        # Store OTP in cache (1 min expiry)
-        cache.set(f'otp_{mobile_number}', otp_code, timeout=60)
-        
-        attempt.attempt_count += 1
-        attempt.save()
-        
-        print(f'sending otp {otp_code} to mobile {mobile_number}')
         
         # Check if user has password (only operator_admin should have password)
         requires_password = False
@@ -71,23 +63,54 @@ class MobileLoginView(viewsets.ViewSet):
             profile = Profile.objects.get(user=user)
             has_password = user.has_usable_password()
             print(f'[OTP REQUEST] User {mobile_number} - role: {profile.role}, has_usable_password: {has_password}')
-            # Only require password for operator_admin with usable password
             if profile.role == 'operator_admin' and has_password:
                 requires_password = True
         except (User.DoesNotExist, Profile.DoesNotExist):
             print(f'[OTP REQUEST] User {mobile_number} - does not exist')
             pass
         
+        # Try Firebase proxy first if recaptcha token provided
+        if use_firebase and recaptcha_token:
+            print(f'[OTP REQUEST] Attempting Firebase proxy for {mobile_number}')
+            firebase_result = GoogleIdentityProxyService.send_otp(mobile_number, recaptcha_token)
+            
+            if firebase_result['success']:
+                attempt.attempt_count += 1
+                attempt.save()
+                
+                # Store session_info in cache for verification
+                cache.set(f'firebase_session_{mobile_number}', firebase_result['session_info'], timeout=300)
+                
+                print(f'[OTP REQUEST] Firebase proxy success for {mobile_number}')
+                return Response({
+                    'message': 'OTP sent successfully via Firebase',
+                    'method': 'firebase',
+                    'session_info': firebase_result['session_info'],
+                    'requires_password': requires_password
+                }, status=status.HTTP_200_OK)
+            else:
+                print(f'[OTP REQUEST] Firebase proxy failed: {firebase_result.get("error")}, falling back to SMS')
+        
+        # Fallback to SMS
+        otp_code = get_random_string(length=6, allowed_chars='0123456789')
+        cache.set(f'otp_{mobile_number}', otp_code, timeout=60)
+        attempt.attempt_count += 1
+        attempt.save()
+        
+        print(f'[OTP REQUEST] Sending SMS OTP {otp_code} to {mobile_number}')
         result = self.send_otp_via_infobip(mobile_number, otp_code)
+        
         if result['status'] == 'success':
             return Response({
                 'message': 'OTP sent successfully via SMS',
+                'method': 'sms',
                 'requires_password': requires_password
             }, status=status.HTTP_200_OK)
         else:
             print(f"SMS error: {result['message']}")
             return Response({
                 'message': f"OTP: {otp_code} (SMS failed: {result['message']})",
+                'method': 'sms',
                 'requires_password': requires_password
             }, status=status.HTTP_200_OK)
         
@@ -225,124 +248,46 @@ class MobileLoginView(viewsets.ViewSet):
         
         return Response({'requires_password': requires_password}, status=status.HTTP_200_OK)
     
-    @action(detail=False, methods=['post'], url_path='verify-firebase-otp')
-    def verify_firebase_otp(self, request):
-        firebase_token = request.data.get('firebase_token')
-        
-        if not firebase_token:
-            return Response({'error': 'Firebase token required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            # Verify Firebase token and extract phone number
-            token_data = verify_firebase_token(firebase_token)
-            mobile_number = token_data['phone_number']
-            
-            # Check if user has pending invitation
-            pending_invitation = DriverInvitation.objects.filter(
-                mobile_number=mobile_number,
-                status='pending',
-                expires_at__gt=timezone.now()
-            ).first()
-            
-            # Smart app_type detection: if pending invitation exists, default to driver
-            app_type = request.data.get('app_type')
-            if not app_type:
-                app_type = 'driver' if pending_invitation else 'passenger'
-            print(f'[FIREBASE] Detected app_type={app_type}, has_invitation={bool(pending_invitation)}')
-            
-            # Create or get user
-            user, created = User.objects.get_or_create(
-                username=mobile_number,
-                defaults={'email': f'{mobile_number}@temp.mishwari.com'}
-            )
-            
-            # Create or get profile with appropriate role
-            # For new users, set role based on app_type to avoid immediate blocking
-            default_role = 'passenger'
-            if pending_invitation:
-                default_role = 'invited_driver'
-            elif app_type == 'driver':
-                default_role = 'standalone_driver'  # Will be finalized in complete_profile
-            
-            profile, _ = Profile.objects.get_or_create(
-                user=user,
-                defaults={
-                    'mobile_number': mobile_number,
-                    'role': default_role
-                }
-            )
-            
-            # Validate app access based on role
-            print(f'[FIREBASE] mobile={mobile_number}, app_type={app_type}, role={profile.role}, created={created}')
-            if app_type == 'passenger' and profile.role in ['standalone_driver', 'invited_driver', 'operator_admin']:
-                print(f'[FIREBASE] BLOCKING: driver role {profile.role} trying to access passenger app')
-                return Response({
-                    'error': 'WRONG_APP',
-                    'message': 'هذا الحساب مخصص للسائقين. يرجى استخدام تطبيق السائقين للدخول.'
-                }, status=status.HTTP_403_FORBIDDEN)
-            
-            if app_type == 'driver' and profile.role == 'passenger':
-                print(f'[FIREBASE] BLOCKING: passenger role trying to access driver app')
-                return Response({
-                    'error': 'WRONG_APP',
-                    'message': 'هذا الحساب مخصص للركاب. يرجى استخدام تطبيق الركاب للدخول.'
-                }, status=status.HTTP_403_FORBIDDEN)
-            print(f'[FIREBASE] ALLOWED: role {profile.role} can access {app_type} app')
-            
-            # Create Driver record immediately if pending invitation exists
-            if pending_invitation:
-                Driver.objects.get_or_create(
-                    user=user,
-                    defaults={
-                        'profile': profile,
-                        'driver_rating': 5.0,
-                        'operator': pending_invitation.operator
-                    }
-                )
-            
-            # Check password requirement for operator_admin
-            has_password = user.has_usable_password()
-            if not created and profile.role == 'operator_admin' and has_password:
-                password = request.data.get('password')
-                if not password:
-                    return Response({'error': 'Password required'}, status=status.HTTP_400_BAD_REQUEST)
-                if not user.check_password(password):
-                    return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
-            
-            # Clear OTP attempts
-            try:
-                attempt = OTPAttempt.objects.get(mobile_number=mobile_number)
-                attempt.attempt_count = 0
-                attempt.blocked_until = None
-                attempt.save()
-            except OTPAttempt.DoesNotExist:
-                pass
-            
-            tokens = self.get_tokens_for_user(user)
-            return Response({
-                "message": "Login successful",
-                "tokens": tokens
-            }, status=status.HTTP_200_OK)
-            
-        except ValueError as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response({'error': 'Verification failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
     @action(detail=False, methods=['patch'], url_path='verify-otp')
     def verify_otp(self, request):
         mobile_number = request.data.get('mobile_number')
         otp_code = request.data.get('otp_code')
-        password = request.data.get('password')  # Optional password for operator_admin
+        password = request.data.get('password')
+        session_info = request.data.get('session_info')
+        method = request.data.get('method', 'sms')
         
-        # Get OTP from cache
-        cached_otp = cache.get(f'otp_{mobile_number}')
-        if not cached_otp:
-            return Response({'error': 'OTP expired or not found'}, status=status.HTTP_404_NOT_FOUND)
-        
+        # Check emergency code first (works for both Firebase and SMS)
         emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
+        if emergency_code and otp_code == emergency_code:
+            print(f'[VERIFY OTP] Emergency code used for {mobile_number}')
+        elif method == 'firebase' and session_info:
+            # Verify via Firebase proxy
+            print(f'[VERIFY OTP] Verifying Firebase OTP for session')
+            firebase_result = GoogleIdentityProxyService.verify_otp(session_info, otp_code)
+            
+            if not firebase_result['success']:
+                print(f'[VERIFY OTP] Firebase verification failed: {firebase_result.get("error")}')
+                return Response({
+                    'error': 'INVALID_OTP',
+                    'message': firebase_result['message']
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            mobile_number = firebase_result['phone_number']
+            print(f'[VERIFY OTP] Firebase verification success for {mobile_number}')
+        else:
+            # Verify via SMS
+            cached_otp = cache.get(f'otp_{mobile_number}')
+            if not cached_otp:
+                return Response({'error': 'OTP expired or not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+            if otp_code != cached_otp:
+                return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            print(f'[VERIFY OTP] SMS verification success for {mobile_number}')
         
-        if otp_code == emergency_code or otp_code == cached_otp:
+        # Common verification logic for both methods
+        if True:
             # Check if user has pending invitation
             pending_invitation = DriverInvitation.objects.filter(
                 mobile_number=mobile_number,
@@ -417,7 +362,11 @@ class MobileLoginView(viewsets.ViewSet):
                     return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
             
             # All validations passed - clear OTP and reset attempts
-            cache.delete(f'otp_{mobile_number}')
+            if method == 'sms':
+                cache.delete(f'otp_{mobile_number}')
+            else:
+                cache.delete(f'firebase_session_{mobile_number}')
+            
             try:
                 attempt = OTPAttempt.objects.get(mobile_number=mobile_number)
                 attempt.attempt_count = 0
@@ -430,9 +379,7 @@ class MobileLoginView(viewsets.ViewSet):
             return Response({
                 "message": "Login successful",
                 "tokens": tokens
-            }, status=status.HTTP_200_OK)
-        
-        return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)                                                       
+            }, status=status.HTTP_200_OK)                                                       
     
 
     @action(detail=False, methods=['post'], url_path='verify-transaction', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
@@ -482,11 +429,10 @@ class MobileLoginView(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'], url_path='change-mobile', permission_classes=[IsAuthenticated], authentication_classes=[JWTAuthentication])
     def change_mobile(self, request):
-        """Change mobile number with OTP or Firebase verification"""
+        """Change mobile number with OTP verification"""
         new_mobile = request.data.get('new_mobile')
         otp_code = request.data.get('otp_code')
         password = request.data.get('password')
-        firebase_token = request.data.get('firebase_token')
         
         profile = request.user.profile
         
@@ -495,21 +441,12 @@ class MobileLoginView(viewsets.ViewSet):
             if not password or not request.user.check_password(password):
                 return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
         
-        # Verify Firebase token or OTP
-        if firebase_token:
-            try:
-                token_data = verify_firebase_token(firebase_token)
-                verified_mobile = token_data['phone_number']
-                if verified_mobile != new_mobile:
-                    return Response({'error': 'Mobile number mismatch'}, status=status.HTTP_400_BAD_REQUEST)
-            except ValueError as e:
-                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            cached_otp = cache.get(f'otp_{new_mobile}')
-            emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
-            
-            if not (otp_code == emergency_code or otp_code == cached_otp):
-                return Response({'error': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
+        # Verify OTP
+        cached_otp = cache.get(f'otp_{new_mobile}')
+        emergency_code = os.getenv('EMERGENCY_OTP_CODE', None)
+        
+        if not (otp_code == emergency_code or otp_code == cached_otp):
+            return Response({'error': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
         
         # Check if new mobile already exists
         if User.objects.filter(username=new_mobile).exclude(id=request.user.id).exists():
@@ -531,9 +468,8 @@ class MobileLoginView(viewsets.ViewSet):
         profile.mobile_number = new_mobile
         profile.save()
         
-        # Clear OTP if used
-        if not firebase_token:
-            cache.delete(f'otp_{new_mobile}')
+        # Clear OTP
+        cache.delete(f'otp_{new_mobile}')
         
         print(f'[MOBILE CHANGE] User {request.user.id} changed mobile from {old_mobile} to {new_mobile}')
         
